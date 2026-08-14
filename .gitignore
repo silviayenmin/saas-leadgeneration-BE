@@ -1,0 +1,29 @@
+# Python Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+venv/
+ENV/
+env/
+.env
+
+# Database & Local Storage
+data_storage/
+*.db
+*.sqlite3
+
+# Logs & Temporary Files
+*.log
+logs/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDEs & System Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
