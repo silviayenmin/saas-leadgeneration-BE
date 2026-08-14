@@ -16,6 +16,13 @@ class OTPVerify(BaseModel):
     email: EmailStr
     otpCode: str
 
+class ResendOTPRequest(BaseModel):
+    email: EmailStr
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
 class OnboardingStep1(BaseModel):
     fullName: str
     phone: str

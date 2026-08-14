@@ -131,8 +131,15 @@ class DatabaseManager:
 
     def connect(self):
         try:
-            self.client = MongoClient(settings.MONGODB_URI, serverSelectionTimeoutMS=3000)
+            self.client = MongoClient(
+                settings.MONGODB_URI,
+                serverSelectionTimeoutMS=3000,
+                connectTimeoutMS=3000,
+                socketTimeoutMS=3000,
+                connect=False
+            )
             self.client.server_info()  # Ping MongoDB
+
             self.db = self.client[settings.DATABASE_NAME]
             self.use_json_fallback = False
             logger.info(f"Successfully connected to MongoDB ({settings.DATABASE_NAME}).")
@@ -145,11 +152,14 @@ class DatabaseManager:
                 raise RuntimeError(f"MongoDB connection error: {e}. Please ensure MongoDB is running.")
 
     def get_collection(self, collection_name: str):
+        if self.db is None:
+            self.connect()
         if self.db is not None:
             return self.db[collection_name]
         if self.use_json_fallback:
             return None
         raise RuntimeError("MongoDB connection not initialized.")
+
 
 
 db_manager = DatabaseManager()
