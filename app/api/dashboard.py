@@ -5,6 +5,7 @@ from app.services.credit_service import CreditService
 
 router = APIRouter()
 
+@router.get("")
 @router.get("/")
 async def get_dashboard_data(user_id: str = Depends(get_current_user_id)):
     credits = CreditService.get_user_credits(user_id)
