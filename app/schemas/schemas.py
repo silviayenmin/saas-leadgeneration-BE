@@ -33,11 +33,15 @@ class OnboardingStep1(BaseModel):
     fullName: str
     phone: str
     jobTitle: str
+    location: Optional[str] = None
+    bio: Optional[str] = None
 
 class OnboardingStep2(BaseModel):
     companyName: str
     companyWebsite: Optional[str] = None
     targetIndustry: str
+    servicesOffered: Optional[str] = None
+    technologiesUsed: Optional[str] = None
 
 class OnboardingStep3(BaseModel):
     targetCities: List[str]
@@ -47,8 +51,15 @@ class UserProfileUpdate(BaseModel):
     fullName: Optional[str] = None
     phone: Optional[str] = None
     company: Optional[str] = None
+    companyName: Optional[str] = None
     website: Optional[str] = None
+    companyWebsite: Optional[str] = None
     jobTitle: Optional[str] = None
+    targetIndustry: Optional[str] = None
+    servicesOffered: Optional[str] = None
+    technologiesUsed: Optional[str] = None
+    location: Optional[str] = None
+    bio: Optional[str] = None
 
 # --- Lead Discovery & Business Schemas ---
 class MapsSearchRequest(BaseModel):

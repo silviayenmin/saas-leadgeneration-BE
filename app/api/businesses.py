@@ -4,6 +4,7 @@ from app.core.database import db_manager
 
 router = APIRouter()
 
+@router.get("")
 @router.get("/")
 async def get_businesses(user_id: str = Depends(get_current_user_id)):
     coll = db_manager.get_collection("businesses")
