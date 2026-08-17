@@ -22,6 +22,12 @@ class ResendOTPRequest(BaseModel):
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    resetCode: str
+    newPassword: str
+
+
 
 class OnboardingStep1(BaseModel):
     fullName: str

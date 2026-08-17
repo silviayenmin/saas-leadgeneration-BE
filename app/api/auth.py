@@ -1,7 +1,7 @@
 import uuid
 import random
 from fastapi import APIRouter, HTTPException, status
-from app.schemas.schemas import UserSignUp, UserLogin, OTPVerify, ResendOTPRequest, ForgotPasswordRequest
+from app.schemas.schemas import UserSignUp, UserLogin, OTPVerify, ResendOTPRequest, ForgotPasswordRequest, ResetPasswordRequest
 from app.core.security import get_password_hash, verify_password, create_access_token
 from app.core.database import db_manager
 from app.services.credit_service import CreditService
@@ -172,9 +172,38 @@ def forgot_password(req: ForgotPasswordRequest):
     else:
         db_manager.json_db.update_one("users", {"email": req.email}, {"$set": {"resetCode": reset_code}})
 
-    EmailService.send_async_otp_email(req.email, reset_code)
+    EmailService.send_async_reset_password_email(req.email, reset_code)
 
     return {
         "success": True,
-        "message": f"Password reset verification code sent to {req.email}"
+        "message": f"Password reset verification code sent to {req.email}",
+        "resetCode": reset_code
     }
+
+@router.post("/reset-password")
+def reset_password(req: ResetPasswordRequest):
+    coll = db_manager.get_collection("users")
+    if coll is not None:
+        user = coll.find_one({"email": req.email})
+    else:
+        user = db_manager.json_db.find_one("users", {"email": req.email})
+
+    if not user:
+        raise HTTPException(status_code=404, detail="No account registered with this email")
+
+    if not user.get("resetCode") or user.get("resetCode") != req.resetCode:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code")
+
+    new_hash = get_password_hash(req.newPassword)
+    update_data = {"passwordHash": new_hash, "resetCode": None}
+
+    if coll is not None:
+        coll.update_one({"email": req.email}, {"$set": update_data})
+    else:
+        db_manager.json_db.update_one("users", {"email": req.email}, {"$set": update_data})
+
+    return {
+        "success": True,
+        "message": "Password reset successfully. You can now sign in with your new password."
+    }
+
