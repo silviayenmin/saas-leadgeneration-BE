@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from app.core.security import get_current_user_id
-from app.core.database import db_manager
+from app.core.database import db_manager, serialize_doc
 from app.services.credit_service import CreditService
 
 router = APIRouter()
@@ -48,6 +48,6 @@ async def get_dashboard_data(user_id: str = Depends(get_current_user_id)):
                 "aiPitchesGenerated": ai_pitches
             },
             "intentDistribution": intent_counts,
-            "recentLeads": businesses[:10]
+            "recentLeads": serialize_doc(businesses[:10])
         }
     }

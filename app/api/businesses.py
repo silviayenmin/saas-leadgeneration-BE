@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from app.core.security import get_current_user_id
-from app.core.database import db_manager
+from app.core.database import db_manager, serialize_doc
 
 router = APIRouter()
 
@@ -12,7 +12,7 @@ async def get_businesses(user_id: str = Depends(get_current_user_id)):
         items = list(coll.find({"userId": user_id}))
     else:
         items = db_manager.json_db.find("businesses", {"userId": user_id})
-    return {"success": True, "data": items}
+    return {"success": True, "data": serialize_doc(items)}
 
 @router.get("/{business_id}")
 async def get_business_detail(business_id: str, user_id: str = Depends(get_current_user_id)):
@@ -25,4 +25,4 @@ async def get_business_detail(business_id: str, user_id: str = Depends(get_curre
     if not item:
         raise HTTPException(status_code=404, detail="Business lead not found")
 
-    return {"success": True, "data": item}
+    return {"success": True, "data": serialize_doc(item)}

@@ -161,5 +161,20 @@ class DatabaseManager:
         raise RuntimeError("MongoDB connection not initialized.")
 
 
-
 db_manager = DatabaseManager()
+
+
+def serialize_doc(doc):
+    if doc is None:
+        return None
+    if isinstance(doc, list):
+        return [serialize_doc(d) for d in doc]
+    if isinstance(doc, dict):
+        new_doc = {}
+        for k, v in doc.items():
+            if k == "_id":
+                continue
+            new_doc[k] = serialize_doc(v)
+        return new_doc
+    return doc
+

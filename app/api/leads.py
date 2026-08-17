@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from app.core.security import get_current_user_id
-from app.core.database import db_manager
+from app.core.database import db_manager, serialize_doc
 from app.schemas.schemas import LeadPipelineUpdate
 
 router = APIRouter()
@@ -15,7 +15,7 @@ async def get_leads(user_id: str = Depends(get_current_user_id)):
         leads = list(coll.find({"userId": user_id}))
     else:
         leads = db_manager.json_db.find("leads", {"userId": user_id})
-    return {"success": True, "data": leads}
+    return {"success": True, "data": serialize_doc(leads)}
 
 @router.post("/add")
 async def add_to_pipeline(business_id: str, user_id: str = Depends(get_current_user_id)):
@@ -27,6 +27,16 @@ async def add_to_pipeline(business_id: str, user_id: str = Depends(get_current_u
 
     if not b:
         raise HTTPException(status_code=404, detail="Business not found")
+
+    # Check if lead already exists in CRM pipeline
+    coll_l = db_manager.get_collection("leads")
+    if coll_l is not None:
+        existing = coll_l.find_one({"businessId": business_id, "userId": user_id})
+    else:
+        existing = db_manager.json_db.find_one("leads", {"businessId": business_id, "userId": user_id})
+
+    if existing:
+        return {"success": True, "message": "Lead already in pipeline", "data": serialize_doc(existing)}
 
     lead_item = {
         "id": str(uuid.uuid4()),
@@ -45,4 +55,4 @@ async def add_to_pipeline(business_id: str, user_id: str = Depends(get_current_u
     else:
         db_manager.json_db.insert_one("leads", lead_item)
 
-    return {"success": True, "message": "Lead added to pipeline", "data": lead_item}
+    return {"success": True, "message": "Lead added to pipeline", "data": serialize_doc(lead_item)}

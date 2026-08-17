@@ -70,10 +70,12 @@ class MapsSearchRequest(BaseModel):
     minReviews: Optional[int] = 0
     hasWebsite: bool = False
     verifiedEmail: bool = False
+    limit: int = 10
 
 class BusinessSchema(BaseModel):
     id: Optional[str] = None
     userId: str
+    scanId: Optional[str] = None
     name: str
     category: str
     address: str
