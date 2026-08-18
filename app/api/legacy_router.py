@@ -373,6 +373,8 @@ def save_db(db_data: dict, user_id: str):
             del lead_copy["_id"]
         lead_copy["sourceUrl"] = url
         lead_copy["userId"] = user_id
+        if "id" not in lead_copy or not lead_copy["id"]:
+            lead_copy["id"] = f"lead_{uuid.uuid4().hex[:12]}"
         # Also store crmStatus mapping to stage for pipeline compatibility
         crm_stage_map = {
             "New": "Discovered",
@@ -540,6 +542,13 @@ async def perform_search_background(task_id: str, payload: SearchRequest, user_i
         total_results_found = len(unique_raw_results)
         print(f"[Search] Merged results: {total_results_found} unique posts/threads found.")
         
+        user_coll = db_manager.get_collection("users")
+        user_profile = None
+        if user_coll is not None:
+            user_profile = user_coll.find_one({"id": user_id})
+        else:
+            user_profile = db_manager.json_db.find_one("users", {"id": user_id})
+
         current_search_leads = []
         sem = asyncio.Semaphore(3)
         
@@ -587,7 +596,7 @@ async def perform_search_background(task_id: str, payload: SearchRequest, user_i
                         lead["keyContacts"] = result.get("meta_contacts") or []
                     
                     # 5. Lead Intent Scoring Engine
-                    lead = calculate_lead_score(lead)
+                    lead = calculate_lead_score(lead, user_profile)
                     
                     # Ensure author name is populated (use fallback parser if missing)
                     author = lead.get("authorName")
@@ -916,7 +925,14 @@ async def update_lead_crm_endpoint(payload: UpdateCRMRequest, user_id: str = Dep
         db[payload.sourceUrl]["keyContactsSource"] = payload.keyContactsSource
         
     # Recalculate score after user modifications
-    db[payload.sourceUrl] = calculate_lead_score(db[payload.sourceUrl])
+    user_coll = db_manager.get_collection("users")
+    user_profile = None
+    if user_coll is not None:
+        user_profile = user_coll.find_one({"id": user_id})
+    else:
+        user_profile = db_manager.json_db.find_one("users", {"id": user_id})
+
+    db[payload.sourceUrl] = calculate_lead_score(db[payload.sourceUrl], user_profile)
     save_db(db, user_id)
     return {"status": "success", "lead": db[payload.sourceUrl]}
 
