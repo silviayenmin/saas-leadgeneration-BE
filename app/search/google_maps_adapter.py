@@ -446,8 +446,13 @@ class GoogleMapsAdapter:
                     else:
                         print("[GoogleMapsAdapter] Running fast feed card extraction...")
                         raw_leads = page.evaluate("""
-                            ({ maxResults }) => {
-                                const cards = Array.from(document.querySelectorAll('div.Nv2PK')).slice(0, maxResults);
+                            ({ targetUrls }) => {
+                                const cleanUrl = (u) => (u || '').split('?')[0].replace(/\\/$/, '').trim();
+                                const targetSet = new Set((targetUrls || []).map(cleanUrl));
+                                const cards = Array.from(document.querySelectorAll('div.Nv2PK')).filter(card => {
+                                    const href = card.querySelector('a.hfpxzc')?.href || '';
+                                    return targetSet.has(cleanUrl(href));
+                                });
                                 return cards.map(card => {
                                     const name = card.getAttribute('aria-label') || card.querySelector('a.hfpxzc')?.getAttribute('aria-label') || '';
                                     const mapsUrl = card.querySelector('a.hfpxzc')?.href || '';
@@ -536,7 +541,7 @@ class GoogleMapsAdapter:
                                     return { name, category, address, phone, rating, reviews, website, mapsUrl };
                                 });
                             }
-                        """, {"maxResults": max_results})
+                        """, {"targetUrls": place_urls})
                         
                         # Visit detail page ONLY if phone or website is missing from card
                         for idx, lead in enumerate(raw_leads, 1):
