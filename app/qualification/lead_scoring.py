@@ -2,7 +2,69 @@ EMPTY_VALUES = {"", "none", "unknown", "not specified", "no company details", "l
 def is_empty_value(v): 
     return not v or str(v).strip().lower() in EMPTY_VALUES
 
-def calculate_lead_score(lead: dict) -> dict:
+def calculate_lead_score(lead: dict, user_profile: dict = None) -> dict:
+    # Calculate profile matching score if user profile settings are available
+    profile_score = None
+    if user_profile:
+        matched_points = 40  # Baseline points
+        
+        # 1. Compare targetIndustry (up to 20 points)
+        target_industry = user_profile.get("targetIndustry")
+        lead_category = lead.get("leadCategory") or lead.get("category") or ""
+        if target_industry and lead_category:
+            ti_words = {w.lower().strip() for w in str(target_industry).split() if len(w.strip()) > 2}
+            lc_words = {w.lower().strip() for w in str(lead_category).split() if len(w.strip()) > 2}
+            if ti_words & lc_words:
+                matched_points += 20
+            elif any(ti_w in str(lead_category).lower() for ti_w in ti_words):
+                matched_points += 15
+                
+        # 2. Compare targetCities / location (up to 15 points)
+        target_cities = user_profile.get("targetCities")
+        lead_location = lead.get("location") or lead.get("address") or ""
+        if target_cities and lead_location:
+            cities = []
+            if isinstance(target_cities, list):
+                cities = [str(c).lower().strip() for c in target_cities]
+            else:
+                cities = [c.lower().strip() for c in str(target_cities).split(",") if c.strip()]
+                
+            if any(c in str(lead_location).lower() for c in cities):
+                matched_points += 15
+                
+        # 3. Compare servicesOffered / serviceRequired or needDescription (up to 15 points)
+        services_offered = user_profile.get("servicesOffered")
+        service_req = lead.get("serviceRequired") or lead.get("needDescription") or ""
+        if services_offered and service_req:
+            so_words = {w.lower().strip() for w in str(services_offered).split() if len(w.strip()) > 2}
+            if any(so_w in str(service_req).lower() for so_w in so_words):
+                matched_points += 15
+                
+        # 4. Compare targetBusinessTypes / companyName (up to 10 points)
+        target_biz_types = user_profile.get("targetBusinessTypes")
+        comp_name = lead.get("companyName") or lead.get("authorName") or ""
+        if target_biz_types and comp_name:
+            biz_types = []
+            if isinstance(target_biz_types, list):
+                biz_types = [str(b).lower().strip() for b in target_biz_types]
+            else:
+                biz_types = [b.lower().strip() for b in str(target_biz_types).split(",") if b.strip()]
+                
+            if any(b in str(comp_name).lower() for b in biz_types):
+                matched_points += 10
+                
+        profile_score = min(matched_points, 100)
+
+    if profile_score is not None:
+        lead["leadScore"] = profile_score
+        if profile_score >= 70:
+            lead["leadCategory"] = "High Intent"
+        elif profile_score >= 50:
+            lead["leadCategory"] = "Medium Intent"
+        else:
+            lead["leadCategory"] = "Low Intent"
+        return lead
+
     search_type = lead.get("search_type", "sales")
     if str(search_type).lower().strip() == "recruiter":
         intent_score = 0
