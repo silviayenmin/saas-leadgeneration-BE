@@ -365,7 +365,11 @@ class GoogleMapsAdapter:
                                 if (/^[1-5]\.[0-9]$/.test(txt)) {
                                     rating = txt;
                                 } else if (txt.includes('(') && txt.includes(')')) {
-                                    reviews = txt.replace(/[()]/g, '').trim();
+                                    const cleanStr = txt.replace(/[()]/g, '').trim();
+                                    const parts = cleanStr.split(/\s+/);
+                                    if (parts.length > 0 && /^\d+[\d,.]*[km]?$/i.test(parts[0])) {
+                                        reviews = parts[0];
+                                    }
                                 } else if (/^\d+[\d,]*$/.test(txt)) {
                                     reviews = txt.trim();
                                 }
@@ -494,8 +498,12 @@ class GoogleMapsAdapter:
                                         if (/^[1-5]\.[0-9]$/.test(s)) {
                                             rating = s;
                                         }
-                                        if (/^\(\d+[\d,]*\)$/.test(s)) {
-                                            reviews = s.replace(/[()]/g, '').trim();
+                                        if (s.startsWith('(') && s.endsWith(')')) {
+                                            const cleanStr = s.replace(/[()]/g, '').trim();
+                                            const parts = cleanStr.split(/\s+/);
+                                            if (parts.length > 0 && /^\d+[\d,.]*[km]?$/i.test(parts[0])) {
+                                                reviews = parts[0];
+                                            }
                                         }
                                     }
                                     
