@@ -38,8 +38,9 @@ async def root():
     }
 
 # Import and Register API Routers
-from app.api import auth, users, dashboard, maps, businesses, leads, pipeline, ai, enrichment, credits, subscription, integrations, webhooks
+from app.api import auth, users, dashboard, maps, businesses, leads, pipeline, ai, enrichment, credits, subscription, integrations, webhooks, legacy_router
 
+app.include_router(legacy_router.router, prefix="", tags=["Legacy Compatibility"])
 app.include_router(auth.router, prefix=f"{settings.API_PREFIX}/auth", tags=["Auth"])
 app.include_router(users.router, prefix=f"{settings.API_PREFIX}/users", tags=["Users"])
 app.include_router(dashboard.router, prefix=f"{settings.API_PREFIX}/dashboard", tags=["Dashboard"])
@@ -53,3 +54,4 @@ app.include_router(credits.router, prefix=f"{settings.API_PREFIX}/credits", tags
 app.include_router(subscription.router, prefix=f"{settings.API_PREFIX}/subscription", tags=["Subscription"])
 app.include_router(integrations.router, prefix=f"{settings.API_PREFIX}/integrations", tags=["Integrations"])
 app.include_router(webhooks.router, prefix=f"{settings.API_PREFIX}/webhooks", tags=["Webhooks"])
+

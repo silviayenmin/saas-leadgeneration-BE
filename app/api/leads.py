@@ -13,6 +13,9 @@ async def get_leads(user_id: str = Depends(get_current_user_id)):
     coll = db_manager.get_collection("leads")
     if coll is not None:
         leads = list(coll.find({"userId": user_id}))
+        for lead in leads:
+            if "_id" in lead:
+                lead["_id"] = str(lead["_id"])
     else:
         leads = db_manager.json_db.find("leads", {"userId": user_id})
     return {"success": True, "data": leads}
