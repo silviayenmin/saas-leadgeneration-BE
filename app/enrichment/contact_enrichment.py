@@ -403,9 +403,9 @@ class ContactEnrichmentManager:
         else:
             cleaned_company = company_name
 
-        # New: fallback chain tries Hunter → Apollo → Prospeo → Serper Search fallback
+        # New: fallback chain tries Apollo → Hunter → Prospeo → Serper Search fallback
         if self.provider == "fallback_chain":
-            for EnricherClass in [HunterEnricher, ApolloEnricher, ProspeoEnricher, SerperEnricher]:
+            for EnricherClass in [ApolloEnricher, HunterEnricher, ProspeoEnricher, SerperEnricher]:
                 result = EnricherClass().enrich(author_name, cleaned_company)
                 if result and (result.get("email") or result.get("keyContacts")):
                     return result

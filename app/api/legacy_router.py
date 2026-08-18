@@ -951,7 +951,8 @@ async def enrich_lead_contact_endpoint(payload: EnrichContactRequest, user_id: s
         if coll is not None:
             existing_enrichment = coll.find_one({
                 "sourceUrl": payload.sourceUrl,
-                "contactInfo": {"$exists": True, "$ne": "", "$nin": [None, "None", "not specified", "Unknown"]}
+                "contactInfo": {"$exists": True, "$ne": "", "$nin": [None, "None", "not specified", "Unknown"]},
+                "contactSource": {"$in": ["apollo", "hunter", "prospeo", "serper"]}
             })
             if existing_enrichment:
                 lead["contactInfo"] = existing_enrichment["contactInfo"]
@@ -989,6 +990,23 @@ async def enrich_lead_contact_endpoint(payload: EnrichContactRequest, user_id: s
         author = validate_author_name(author, lead.get("platform"))
         lead["authorName"] = author
         
+    # If the author name is a generic placeholder, try to substitute it with a decision-maker from keyContacts
+    is_generic_author = is_empty_value(author) or str(author).strip().lower() in ["business owner", "unknown", "unknown poster", "lead", "job enquiry", "hr", "hiring", "contact", "support"]
+    if is_generic_author:
+        key_contacts = lead.get("keyContacts") or []
+        if key_contacts:
+            selected_contact = None
+            for c in key_contacts:
+                title_lower = str(c.get("title", "")).lower()
+                if any(kw in title_lower for kw in ["ceo", "founder", "owner", "director", "president", "partner", "manager"]):
+                    selected_contact = c
+                    break
+            if not selected_contact:
+                selected_contact = key_contacts[0]
+            if selected_contact.get("name"):
+                author = selected_contact["name"]
+                print(f"[Enrich Contact Cache] generic author overridden with key contact: {author}")
+        
     company = lead.get("companyName")
     
     if not is_empty_value(author) and is_empty_value(company):
@@ -1017,6 +1035,9 @@ async def enrich_lead_contact_endpoint(payload: EnrichContactRequest, user_id: s
         lead["contactInfo"] = c_info
         lead["contactSource"] = enrichment_info.get("contactSource")
         lead["contactConfidence"] = enrichment_info.get("contactConfidence")
+        # Save B2B enriched author name
+        if author and str(author).strip().lower() not in ["business owner", "unknown", "unknown poster", "lead", "job enquiry", "hr", "hiring", "contact", "support"]:
+            lead["authorName"] = author
     
     if is_empty_value(lead.get("companyName")) and enrichment_info.get("companyName"):
         lead["companyName"] = validate_company_name(enrichment_info.get("companyName"))
