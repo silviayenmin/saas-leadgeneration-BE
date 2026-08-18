@@ -774,8 +774,11 @@ class GoogleMapsAdapter:
             if w in blacklist or len(w) < 2:
                 return False
         if company_name:
-            co_words = set(company_name.lower().split())
-            if set(words).issubset(co_words):
+            co_words = {w.strip().lower() for w in company_name.split() if len(w.strip()) > 1}
+            common_words = {"and", "the", "a", "of", "in", "for", "on", "at", "to", "by", "with", "ltd", "inc", "llc", "group", "co", "design", "creative", "studio", "nursery"}
+            co_words = co_words - common_words
+            overlap = set(words) & co_words
+            if overlap:
                 return False
         return True
 

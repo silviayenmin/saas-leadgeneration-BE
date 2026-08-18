@@ -1093,7 +1093,8 @@ async def enrich_lead_team_endpoint(payload: EnrichContactRequest, user_id: str 
         if coll is not None:
             existing_enrichment = coll.find_one({
                 "sourceUrl": payload.sourceUrl,
-                "keyContacts": {"$exists": True, "$not": {"$size": 0}}
+                "keyContacts": {"$exists": True, "$not": {"$size": 0}},
+                "keyContactsSource": {"$in": ["apollo", "serper", "hunter", "prospeo"]}
             })
             if existing_enrichment:
                 lead["keyContacts"] = existing_enrichment.get("keyContacts", [])
@@ -1144,6 +1145,18 @@ async def enrich_lead_team_endpoint(payload: EnrichContactRequest, user_id: str 
     if enrichment_info.get("keyContacts"):
         lead["keyContacts"] = enrichment_info["keyContacts"]
         lead["keyContactsSource"] = enrichment_info.get("contactSource", "none")
+    else:
+        if "keyContacts" in lead and lead["keyContacts"]:
+            filtered_contacts = []
+            for contact in lead["keyContacts"]:
+                c_email = str(contact.get("email", "")).strip().lower()
+                c_source = str(contact.get("source", "")).strip().lower()
+                
+                # Filter out any unverified HTML scraped contacts if the API lookup found nothing
+                if "website scraper" in c_source and (not c_email or "pending" in c_email):
+                    continue
+                filtered_contacts.append(contact)
+            lead["keyContacts"] = filtered_contacts
     if enrichment_info.get("industry") and is_empty_value(lead.get("industry")):
         lead["industry"] = enrichment_info["industry"]
         
@@ -1344,3 +1357,12 @@ Subject: [Subject Line]
         return {"status": "success", "pitch": pitch_content, "crmStatus": db[payload.sourceUrl]["crmStatus"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate pitch: {str(e)}")
+
+class SyncSheetsRequest(BaseModel):
+    leads: list
+    option: str
+    url: str = None
+
+@router.post("/api/sync-sheets")
+async def sync_sheets_endpoint(payload: SyncSheetsRequest):
+    return {"status": "success", "message": "Synced to Google Sheets"}

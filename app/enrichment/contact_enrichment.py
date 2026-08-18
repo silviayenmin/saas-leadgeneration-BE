@@ -347,12 +347,22 @@ class SerperEnricher(BaseEnricher):
                                 break
 
                 if isinstance(contacts_list, list) and contacts_list:
-                    # Clean up placeholder values
+                    # Auto-map LinkedIn links from search results if missing
                     for c in contacts_list:
-                        if c.get("linkedin") == "No LinkedIn Link":
-                            c["linkedin"] = None
-                        if c.get("email") == "No Email Found":
-                            c["email"] = None
+                        if not c.get("linkedin"):
+                            c_name_lower = str(c.get("name", "")).lower()
+                            name_parts = [p.strip() for p in c_name_lower.split() if len(p.strip()) > 2]
+                            if name_parts:
+                                for organic in organic_list:
+                                    for item in organic:
+                                        link = item.get("link", "")
+                                        title_lower = item.get("title", "").lower()
+                                        if "linkedin.com/in/" in link.lower():
+                                            if all(part in title_lower or part in link.lower() for part in name_parts):
+                                                c["linkedin"] = link
+                                                break
+                                    if c.get("linkedin"):
+                                        break
 
                     # Find the first contact to map as primary email/author
                     primary_contact = contacts_list[0]
