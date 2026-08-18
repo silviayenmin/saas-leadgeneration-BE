@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     SERPER_API_KEY: str = ""
     GROQ_API_KEY: str = ""
     OLLAMA_BASE_URL: str = "http://localhost:11434"
+    HUNTER_API_KEY: str = ""
+    APOLLO_API_KEY: str = ""
+    PROSPEO_API_KEY: str = ""
 
     # SMTP Outreach & Email Verification
     SMTP_HOST: str = "smtp.gmail.com"

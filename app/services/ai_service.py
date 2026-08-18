@@ -15,7 +15,7 @@ class GroqProvider:
             "Content-Type": "application/json"
         }
         payload = {
-            "model": "llama-3.3-70b-versatile",
+            "model": "groq/compound-mini",
             "messages": [
                 {"role": "system", "content": "You are MapFlow AI, an expert B2B lead generation & sales pitch assistant."},
                 {"role": "user", "content": prompt}
