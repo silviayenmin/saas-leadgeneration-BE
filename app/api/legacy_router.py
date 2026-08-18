@@ -746,11 +746,11 @@ async def perform_search_background(task_id: str, payload: SearchRequest, user_i
         searches.insert(0, new_search_doc)
         save_searches(searches, user_id)
         
-        # Deduct SaaS credits from user balance for the performed search
-        credits_cost = settings.COST_MAP_SEARCH if platform == "google_maps" else 1
+        # Deduct SaaS credits from user balance for the performed search (1 credit per lead scraped for demo)
+        credits_cost = len(current_search_leads)
         success, msg, info = CreditService.check_and_deduct(
             user_id,
-            f"Scraper search: {payload.keyword} ({platform})",
+            f"Scraper search: {payload.keyword} ({platform}) - {credits_cost} leads",
             credits_cost
         )
         if not success:
@@ -936,14 +936,14 @@ async def enrich_lead_contact_endpoint(payload: EnrichContactRequest, user_id: s
         
     lead = db[payload.sourceUrl]
 
-    # Deduct SaaS credits from user balance for the email reveal
-    success, msg, info = CreditService.check_and_deduct(
-        user_id,
-        f"Email Enrichment: {lead.get('authorName', 'Lead')}",
-        settings.COST_REVEAL_EMAIL
-    )
-    if not success:
-        raise HTTPException(status_code=400, detail=msg)
+    # Deduct SaaS credits from user balance for the email reveal (Commented out for demo)
+    # success, msg, info = CreditService.check_and_deduct(
+    #     user_id,
+    #     f"Email Enrichment: {lead.get('authorName', 'Lead')}",
+    #     settings.COST_REVEAL_EMAIL
+    # )
+    # if not success:
+    #     raise HTTPException(status_code=400, detail=msg)
 
     # Check cache/smart reuse (other users' database copies)
     try:
@@ -1078,14 +1078,14 @@ async def enrich_lead_team_endpoint(payload: EnrichContactRequest, user_id: str 
         
     lead = db[payload.sourceUrl]
 
-    # Deduct SaaS credits from user balance for the email reveal
-    success, msg, info = CreditService.check_and_deduct(
-        user_id,
-        f"Team Enrichment: {lead.get('companyName', 'Company')}",
-        settings.COST_REVEAL_EMAIL
-    )
-    if not success:
-        raise HTTPException(status_code=400, detail=msg)
+    # Deduct SaaS credits from user balance for the email reveal (Commented out for demo)
+    # success, msg, info = CreditService.check_and_deduct(
+    #     user_id,
+    #     f"Team Enrichment: {lead.get('companyName', 'Company')}",
+    #     settings.COST_REVEAL_EMAIL
+    # )
+    # if not success:
+    #     raise HTTPException(status_code=400, detail=msg)
 
     # Check cache/smart reuse (other users' database copies)
     try:
@@ -1179,14 +1179,14 @@ async def generate_pitch_endpoint(payload: GeneratePitchRequest, user_id: str = 
         
     lead = db[payload.sourceUrl]
 
-    # Deduct SaaS credits from user balance for the email pitch generation
-    success, msg, info = CreditService.check_and_deduct(
-        user_id,
-        f"AI Outreach Pitch: {lead.get('authorName', 'Lead')}",
-        settings.COST_AI_PITCH
-    )
-    if not success:
-        raise HTTPException(status_code=400, detail=msg)
+    # Deduct SaaS credits from user balance for the email pitch generation (Commented out for demo)
+    # success, msg, info = CreditService.check_and_deduct(
+    #     user_id,
+    #     f"AI Outreach Pitch: {lead.get('authorName', 'Lead')}",
+    #     settings.COST_AI_PITCH
+    # )
+    # if not success:
+    #     raise HTTPException(status_code=400, detail=msg)
 
     author = lead.get("authorName") or "there"
     company = lead.get("companyName") or ""
