@@ -370,7 +370,11 @@ def save_db(db_data: dict, user_id: str):
     for url, lead in db_data.items():
         lead_copy = dict(lead)
         if "_id" in lead_copy:
-            del lead_copy["_id"]
+            from bson import ObjectId
+            try:
+                lead_copy["_id"] = ObjectId(lead_copy["_id"])
+            except Exception:
+                del lead_copy["_id"]
         lead_copy["sourceUrl"] = url
         lead_copy["userId"] = user_id
         if "id" not in lead_copy or not lead_copy["id"]:
@@ -411,7 +415,10 @@ def save_searches(searches: list, user_id: str):
     for s in searches:
         s_copy = dict(s)
         if "_id" in s_copy:
-            if not isinstance(s_copy["_id"], str):
+            from bson import ObjectId
+            try:
+                s_copy["_id"] = ObjectId(s_copy["_id"])
+            except Exception:
                 del s_copy["_id"]
         s_copy["userId"] = user_id
         if coll is not None:
@@ -564,11 +571,21 @@ async def perform_search_background(task_id: str, payload: SearchRequest, user_i
                     plat_resolved = determine_lead_platform(source_url)
                     
                     # 4. Intent Signal Classification
-                    lead = await asyncio.to_thread(classify_lead_intent, title, snippet, payload.search_type or "sales", plat_resolved)
+                    new_lead_data = await asyncio.to_thread(classify_lead_intent, title, snippet, payload.search_type or "sales", plat_resolved)
+                    
+                    # Merge with existing lead to preserve _id and createdAt
+                    if source_url in db:
+                        lead = dict(db[source_url])
+                        for k, v in new_lead_data.items():
+                            if v is not None:
+                                lead[k] = v
+                    else:
+                        lead = new_lead_data
+                        lead["createdAt"] = datetime.datetime.utcnow().isoformat()
+                        
                     lead["sourceUrl"] = source_url
                     lead["platform"] = plat_resolved
                     lead["search_type"] = payload.search_type or "sales"
-                    lead["createdAt"] = datetime.datetime.utcnow().isoformat()
                     lead["isConverted"] = False
                     
                     # Initialize candidate-specific fields
@@ -593,7 +610,7 @@ async def perform_search_background(task_id: str, payload: SearchRequest, user_i
                             lead["needDescription"] = result.get("meta_description")
                         if result.get("meta_owner_name"):
                             lead["authorName"] = result.get("meta_owner_name")
-                        lead["keyContacts"] = result.get("meta_contacts") or []
+                        lead["keyContacts"] = []
                     
                     # 5. Lead Intent Scoring Engine
                     lead = calculate_lead_score(lead, user_profile)
@@ -999,34 +1016,47 @@ async def enrich_lead_contact_endpoint(payload: EnrichContactRequest, user_id: s
     except Exception as e:
         print(f"[Enrich Contact Cache] Error querying existing enrichment: {e}")
 
-    author = lead.get("authorName")
-    if is_empty_value(author):
-        title = fetch_title_from_url(payload.sourceUrl)
-        author = extract_fallback_author(title, payload.sourceUrl)
-        author = validate_author_name(author, lead.get("platform"))
-        lead["authorName"] = author
-        
-    # If the author name is a generic placeholder, try to substitute it with a decision-maker from keyContacts
-    is_generic_author = is_empty_value(author) or str(author).strip().lower() in ["business owner", "unknown", "unknown poster", "lead", "job enquiry", "hr", "hiring", "contact", "support"]
-    if is_generic_author:
-        key_contacts = lead.get("keyContacts") or []
-        if key_contacts:
-            selected_contact = None
-            for c in key_contacts:
-                title_lower = str(c.get("title", "")).lower()
-                if any(kw in title_lower for kw in ["ceo", "founder", "owner", "director", "president", "partner", "manager"]):
-                    selected_contact = c
-                    break
-            if not selected_contact:
-                selected_contact = key_contacts[0]
-            if selected_contact.get("name"):
-                author = selected_contact["name"]
-                print(f"[Enrich Contact Cache] generic author overridden with key contact: {author}")
-        
-    company = lead.get("companyName")
+    # 1. Determine who we are enriching
+    enriching_key_contact = False
+    target_author = lead.get("authorName")
     
-    if not is_empty_value(author) and is_empty_value(company):
-        enriched = enrich_profile_details(author, payload.sourceUrl)
+    if payload.authorName and str(payload.authorName).strip():
+        # If payload.authorName is provided, we use it
+        target_author = payload.authorName
+        # Check if this name is in keyContacts
+        key_contacts = lead.get("keyContacts") or []
+        for contact in key_contacts:
+            if contact.get("name") and contact.get("name").strip().lower() == target_author.strip().lower():
+                enriching_key_contact = True
+                break
+    else:
+        # Fallback to lead authorName logic as before
+        if is_empty_value(target_author):
+            title = fetch_title_from_url(payload.sourceUrl)
+            target_author = extract_fallback_author(title, payload.sourceUrl)
+            target_author = validate_author_name(target_author, lead.get("platform"))
+            lead["authorName"] = target_author
+            
+        is_generic_author = is_empty_value(target_author) or str(target_author).strip().lower() in ["business owner", "unknown", "unknown poster", "lead", "job enquiry", "hr", "hiring", "contact", "support"]
+        if is_generic_author:
+            key_contacts = lead.get("keyContacts") or []
+            if key_contacts:
+                selected_contact = None
+                for c in key_contacts:
+                    title_lower = str(c.get("title", "")).lower()
+                    if any(kw in title_lower for kw in ["ceo", "founder", "owner", "director", "president", "partner", "manager"]):
+                        selected_contact = c
+                        break
+                if not selected_contact:
+                    selected_contact = key_contacts[0]
+                if selected_contact.get("name"):
+                    target_author = selected_contact["name"]
+                    print(f"[Enrich Contact Cache] generic author overridden with key contact: {target_author}")
+                    
+    company = payload.companyName or lead.get("companyName")
+    
+    if not is_empty_value(target_author) and is_empty_value(company):
+        enriched = enrich_profile_details(target_author, payload.sourceUrl)
         if enriched:
             ec = enriched.get("companyName")
             ei = enriched.get("industry")
@@ -1041,29 +1071,47 @@ async def enrich_lead_contact_endpoint(payload: EnrichContactRequest, user_id: s
 
     # Run modular enrichment manager
     enrich_mgr = ContactEnrichmentManager()
-    enrichment_info = enrich_mgr.enrich(author, company)
+    enrichment_info = enrich_mgr.enrich(target_author, company)
     
     c_info = enrichment_info.get("email")
     if c_info == "hello@company.com" or is_empty_value(c_info):
         c_info = None
-    
-    if c_info and not is_empty_value(c_info):
-        lead["contactInfo"] = c_info
-        lead["contactSource"] = enrichment_info.get("contactSource")
-        lead["contactConfidence"] = enrichment_info.get("contactConfidence")
-        # Save B2B enriched author name
-        if author and str(author).strip().lower() not in ["business owner", "unknown", "unknown poster", "lead", "job enquiry", "hr", "hiring", "contact", "support"]:
-            lead["authorName"] = author
-    
+        
+    # Update the lead in DB based on whether it is a key contact or the main contact
+    if enriching_key_contact:
+        key_contacts = lead.get("keyContacts") or []
+        updated = False
+        from app.enrichment.contact_enrichment import find_linkedin_profile
+        for contact in key_contacts:
+            if contact.get("name") and contact.get("name").strip().lower() == target_author.strip().lower():
+                contact["email"] = c_info or "No Email Found"
+                if enrichment_info.get("contactSource"):
+                    contact["source"] = enrichment_info.get("contactSource")
+                # Also resolve LinkedIn URL if missing
+                if not contact.get("linkedin") or str(contact.get("linkedin")).strip().lower() in ["none", "null", "undefined", "no linkedin link"]:
+                    contact["linkedin"] = find_linkedin_profile(target_author, company, lead.get("linkedin"))
+                updated = True
+        if updated:
+            lead["keyContacts"] = key_contacts
+    else:
+        # This is for the primary contact
+        if c_info and not is_empty_value(c_info):
+            lead["contactInfo"] = c_info
+            lead["contactSource"] = enrichment_info.get("contactSource")
+            lead["contactConfidence"] = enrichment_info.get("contactConfidence")
+            # Save B2B enriched author name
+            if target_author and str(target_author).strip().lower() not in ["business owner", "unknown", "unknown poster", "lead", "job enquiry", "hr", "hiring", "contact", "support"]:
+                lead["authorName"] = target_author
+                
     if is_empty_value(lead.get("companyName")) and enrichment_info.get("companyName"):
         lead["companyName"] = validate_company_name(enrichment_info.get("companyName"))
         
-    if enrichment_info.get("authorName"):
+    if enrichment_info.get("authorName") and not enriching_key_contact:
         curr_author = lead.get("authorName")
         if is_empty_value(curr_author) or str(curr_author).strip().lower() in ["business owner", "unknown", "unknown poster", "lead", "job enquiry", "hr", "hiring", "contact", "support"]:
             lead["authorName"] = enrichment_info["authorName"]
             
-    if not is_empty_value(c_info):
+    if not is_empty_value(c_info) and not enriching_key_contact:
         current_author = lead.get("authorName")
         if is_empty_value(current_author) or (lead.get("platform") == "facebook" and is_facebook_fallback_name(current_author, payload.sourceUrl)):
             email_author = extract_author_from_email_or_url(c_info, payload.sourceUrl)
@@ -1083,6 +1131,7 @@ async def enrich_lead_contact_endpoint(payload: EnrichContactRequest, user_id: s
         "companyName": lead.get("companyName"),
         "industry": lead.get("industry"),
         "location": lead.get("location"),
+        "keyContacts": lead.get("keyContacts", []),
         "keyContactsSource": lead.get("keyContactsSource", "none")
     }
 
@@ -1145,10 +1194,11 @@ async def enrich_lead_team_endpoint(payload: EnrichContactRequest, user_id: str 
 
     author = lead.get("authorName")
     company = lead.get("companyName")
+    company_linkedin = lead.get("linkedin")
     
     # Run modular enrichment manager
     enrich_mgr = ContactEnrichmentManager()
-    enrichment_info = enrich_mgr.enrich_team(author, company)
+    enrichment_info = enrich_mgr.enrich_team(author, company, company_linkedin=company_linkedin)
     
     if enrichment_info.get("employeeCount"):
         lead["employeeCount"] = str(enrichment_info["employeeCount"])
