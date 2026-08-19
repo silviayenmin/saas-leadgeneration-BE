@@ -71,6 +71,34 @@ def classify_lead_intent(title: str, snippet: str, search_type: str = "sales", p
         except Exception as e:
             print(f"[LeadClassifier] Groq classification failed: {e}")
 
+    # Fallback to Gemini API
+    try:
+        gemini_key = settings.GEMINI_API_KEY
+        if gemini_key and gemini_key.strip():
+            print(f"[LeadClassifier] Falling back to Gemini API classification for {title[:40]}...")
+            contents = [
+                {
+                    "role": "user",
+                    "parts": [{"text": prompt}]
+                }
+            ]
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
+            headers = {"Content-Type": "application/json"}
+            payload = {
+                "contents": contents,
+                "generationConfig": {"responseMimeType": "application/json"}
+            }
+            with httpx.Client(timeout=25.0) as client:
+                res = client.post(url, headers=headers, json=payload)
+                if res.status_code == 200:
+                    raw_content = res.json()["candidates"][0]["content"]["parts"][0]["text"]
+                    cleaned = clean_json_response(raw_content)
+                    return json.loads(cleaned)
+                else:
+                    print(f"[LeadClassifier] Gemini returned status {res.status_code}: {res.text}")
+    except Exception as e:
+        print(f"[LeadClassifier] Gemini classification failed: {e}")
+
     # Fallback to Ollama
     try:
         print(f"[LeadClassifier] Falling back to Ollama classification for {title[:40]}...")

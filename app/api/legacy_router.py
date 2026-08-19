@@ -709,7 +709,7 @@ async def perform_search_background(task_id: str, payload: SearchRequest, user_i
                         "confidenceScore": 0,
                         "leadScore": 10,
                         "leadCategory": "Low Intent",
-                        "leadStatus": "Unqualified",
+                        "leadStatus": "Potential Lead",
                         "sourceUrl": source_url,
                         "crmStatus": "New",
                         "draftEmail": "",

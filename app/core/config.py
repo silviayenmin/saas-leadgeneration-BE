@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     GOOGLE_PLACES_API_KEY: str = ""
     SERPER_API_KEY: str = ""
     GROQ_API_KEY: str = ""
+    GEMINI_API_KEY: str = ""
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     HUNTER_API_KEY: str = ""
     APOLLO_API_KEY: str = ""
