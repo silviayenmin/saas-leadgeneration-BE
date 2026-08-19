@@ -266,8 +266,58 @@ class EmailGuessingEnricher(BaseEnricher):
         }
 
 
+def find_linkedin_profile(name: str, company: str, company_linkedin: str = None) -> str:
+    api_key = settings.SERPER_API_KEY
+    if not api_key or not name:
+        return "No LinkedIn Link"
+    
+    name = str(name).strip()
+    company = str(company).strip() if company else ""
+    
+    # Generate list of search queries
+    queries = []
+    
+    # 1. Query with company name
+    queries.append(f'site:linkedin.com/in/ "{name}" {company}')
+    
+    # 2. Query with company LinkedIn slug if available
+    if company_linkedin and "linkedin.com/company/" in company_linkedin.lower():
+        parts = company_linkedin.rstrip("/").split("/company/")
+        if len(parts) > 1:
+            slug = parts[1].split("/")[0]
+            if slug:
+                queries.append(f'site:linkedin.com/in/ "{name}" {slug}')
+                
+    # 3. Query with company short name
+    company_short = company.split()[0] if company else ""
+    if company_short and company_short.lower() != company.lower() and len(company_short) > 2:
+        queries.append(f'site:linkedin.com/in/ "{name}" {company_short}')
+        
+    # 4. General name query
+    queries.append(f'site:linkedin.com/in/ "{name}"')
+    
+    for query in queries:
+        try:
+            resp = requests.post(
+                "https://google.serper.dev/search",
+                json={"q": query},
+                headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
+                timeout=8
+            )
+            if resp.status_code == 200:
+                organic = resp.json().get("organic", [])
+                if organic:
+                    link = organic[0].get("link")
+                    if link and "linkedin.com/in/" in link.lower():
+                        return link
+        except Exception as e:
+            print(f"[find_linkedin_profile] Error: {e}")
+            
+    return "No LinkedIn Link"
+
+
 class SerperEnricher(BaseEnricher):
-    def enrich(self, author_name: str, company_name: str) -> dict:
+    def enrich(self, author_name: str, company_name: str, company_linkedin: str = None) -> dict:
         api_key = settings.SERPER_API_KEY
         if not api_key:
             return {}
@@ -349,24 +399,41 @@ class SerperEnricher(BaseEnricher):
                 if isinstance(contacts_list, list) and contacts_list:
                     # Auto-map LinkedIn links from search results if missing
                     for c in contacts_list:
-                        if not c.get("linkedin"):
-                            c_name_lower = str(c.get("name", "")).lower()
-                            name_parts = [p.strip() for p in c_name_lower.split() if len(p.strip()) > 2]
-                            if name_parts:
-                                for organic in organic_list:
-                                    for item in organic:
-                                        link = item.get("link", "")
-                                        title_lower = item.get("title", "").lower()
-                                        if "linkedin.com/in/" in link.lower():
-                                            if all(part in title_lower or part in link.lower() for part in name_parts):
-                                                c["linkedin"] = link
-                                                break
-                                    if c.get("linkedin"):
-                                        break
+                        c_name = c.get("name", "")
+                        if not c_name:
+                            continue
+                        
+                        # 1. Try free auto-map from company organic search results
+                        c_name_lower = str(c_name).lower()
+                        name_parts = [p.strip() for p in c_name_lower.split() if len(p.strip()) > 2]
+                        if name_parts:
+                            for organic in organic_list:
+                                for item in organic:
+                                    link = item.get("link", "")
+                                    title_lower = item.get("title", "").lower()
+                                    if "linkedin.com/in/" in link.lower():
+                                        if all(part in title_lower or part in link.lower() for part in name_parts):
+                                            c["linkedin"] = link
+                                            break
+                                if c.get("linkedin"):
+                                    break
+                                    
+                        # 2. Targeted search fallback if auto-map failed or returned No LinkedIn Link
+                        if not c.get("linkedin") or str(c.get("linkedin")).strip().lower() in ["none", "null", "undefined", "no linkedin link"]:
+                            c["linkedin"] = find_linkedin_profile(c_name, company_name, company_linkedin)
+
+                        # Clean up email placeholders
+                        if not c.get("email") or str(c.get("email")).strip().lower() in ["none", "null", "undefined", "no email found"]:
+                            c["email"] = "No Email Found"
+                            
+                        if not c.get("linkedin") or str(c.get("linkedin")).strip().lower() in ["none", "null", "undefined", "no linkedin link"]:
+                            c["linkedin"] = "No LinkedIn Link"
 
                     # Find the first contact to map as primary email/author
                     primary_contact = contacts_list[0]
                     p_email = primary_contact.get("email")
+                    if p_email == "No Email Found":
+                        p_email = None
                     
                     return {
                         "email": p_email,
@@ -443,7 +510,7 @@ class ContactEnrichmentManager:
             "contactConfidence": "none"
         }
 
-    def enrich_team(self, author_name: str, company_name: str) -> dict:
+    def enrich_team(self, author_name: str, company_name: str, company_linkedin: str = None) -> dict:
         # Clean company name to remove trailing keywords, cities, separators, and corporate suffixes
         cleaned_company = ""
         if company_name and not is_empty_value(company_name) and company_name.lower().strip() not in ["not specified", "unknown", "none"]:
@@ -476,7 +543,7 @@ class ContactEnrichmentManager:
             return apollo_res
             
         # Fallback to Serper Search
-        serper_res = SerperEnricher().enrich(author_name, cleaned_company)
+        serper_res = SerperEnricher().enrich(author_name, cleaned_company, company_linkedin=company_linkedin)
         if serper_res:
             serper_res["contactSource"] = "serper"
             return serper_res
