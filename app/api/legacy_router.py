@@ -1,10 +1,22 @@
 import time
+import os
+import json
+import gspread
+import imaplib
+import email
+import email.utils
 import uuid
 import datetime
 import asyncio
 from typing import List, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
+
+from sqlalchemy.orm import Session
+from app.core.outreach_db import get_outreach_db
+from app.models.outreach import EmailAccount as SqlEmailAccount, OutreachSettings as SqlOutreachSettings
+from app.services.outreach_crypto import outreach_crypto
+from app.services.outreach_tester import test_smtp_connection, test_imap_connection
 
 from app.core.security import get_current_user_id
 from app.core.database import db_manager
@@ -1430,5 +1442,1102 @@ class SyncSheetsRequest(BaseModel):
     url: str = None
 
 @router.post("/api/sync-sheets")
-async def sync_sheets_endpoint(payload: SyncSheetsRequest):
-    return {"status": "success", "message": "Synced to Google Sheets"}
+async def sync_sheets_endpoint(
+    payload: SyncSheetsRequest,
+    user_id: str = Depends(get_current_user_id)
+):
+    creds_path = "google_credentials.json"
+    if not os.path.exists(creds_path):
+        raise HTTPException(
+            status_code=400,
+            detail="Google credentials file is missing in the backend root directory. Please configure Google Sheets first."
+        )
+
+    # 1. Load user's profile details to find their email for sharing
+    coll_users = db_manager.get_collection("users")
+    if coll_users is not None:
+        user = coll_users.find_one({"id": user_id}) or {}
+    else:
+        user = db_manager.json_db.find_one("users", {"id": user_id}) or {}
+    user_email = user.get("email")
+
+    try:
+        # 2. Authenticate with Google Sheets service account
+        gc = gspread.service_account(filename=creds_path)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Google API authentication failed: {str(e)}"
+        )
+
+    sh = None
+    if payload.option == "new":
+        # 3. Create a new spreadsheet
+        title = f"Silvia Leads Export - {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        try:
+            sh = gc.create(title)
+            # Share with user's email if available
+            if user_email:
+                try:
+                    sh.share(user_email, perm_type="user", role="writer")
+                except Exception as se:
+                    print(f"Failed to share sheet with user {user_email}: {se}")
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to create new Google Sheet: {str(e)}"
+            )
+    else:
+        # 4. Open an existing spreadsheet by URL or ID
+        if not payload.url or not payload.url.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="A valid Google Sheet URL or ID is required for existing spreadsheet sync."
+            )
+        target_url = payload.url.strip()
+        try:
+            if "docs.google.com/spreadsheets" in target_url:
+                sh = gc.open_by_url(target_url)
+            else:
+                sh = gc.open_by_key(target_url)
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not open existing Google Sheet. Please ensure it is shared with the service account email: {str(e)}"
+            )
+
+    if not sh:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to initialize Google Sheet workspace."
+        )
+
+    # 5. Group the leads by search query keyword
+    searches = load_searches(user_id)
+    url_to_keyword = {}
+    for s in searches:
+        kw = s.get("keyword")
+        lead_urls = s.get("leadUrls") or []
+        if kw:
+            for u in lead_urls:
+                url_to_keyword[u] = kw
+
+    grouped_leads = {}
+    for lead in payload.leads:
+        url = lead.get("sourceUrl")
+        kw = url_to_keyword.get(url, "Uncategorized")
+        
+        # Clean worksheet name (max 100 chars, no special characters disallowed by Google Sheets)
+        clean_kw = re.sub(r"[\\/:\?\*\[\]]", "", kw)
+        clean_kw = clean_kw.strip()[:30]  # Keep it short and neat
+        if not clean_kw:
+            clean_kw = "Uncategorized"
+            
+        if clean_kw not in grouped_leads:
+            grouped_leads[clean_kw] = []
+        grouped_leads[clean_kw].append(lead)
+
+    headers = [
+        "Company Name", "Location", "Phone", "Email", 
+        "Rating", "Reviews", "AI Match Score", "CRM Stage", "Maps URL"
+    ]
+
+    # Keep track of created worksheets
+    created_worksheets = []
+
+    # 6. Write leads to the worksheets
+    for group_name, leads_list in grouped_leads.items():
+        try:
+            ws = sh.worksheet(group_name)
+            ws.clear()
+        except gspread.exceptions.WorksheetNotFound:
+            ws = sh.add_worksheet(title=group_name, rows="100", cols="20")
+        
+        created_worksheets.append(ws)
+
+        # Set headers
+        ws.update("A1:I1", [headers])
+
+        # Style headers (Brand Teal #0EA5A4 background, Bold White text, Center aligned)
+        ws.format("A1:I1", {
+            "backgroundColor": {
+                "red": 0.055,
+                "green": 0.647,
+                "blue": 0.643
+            },
+            "textFormat": {
+                "bold": True,
+                "foregroundColor": {
+                    "red": 1.0,
+                    "green": 1.0,
+                    "blue": 1.0
+                }
+            },
+            "horizontalAlignment": "CENTER"
+        })
+
+        # Write data rows
+        rows = []
+        for lead in leads_list:
+            score = lead.get("leadScore")
+            if score is None:
+                score_str = "85%"
+            else:
+                score_str = f"{score}%"
+
+            rows.append([
+                lead.get("companyName") or "Unknown Business",
+                lead.get("location") or "Not Specified",
+                lead.get("phone") or "No phone",
+                lead.get("contactInfo") or "No email revealed",
+                lead.get("rating") or "N/A",
+                lead.get("reviews") or 0,
+                score_str,
+                lead.get("crmStatus") or "New",
+                lead.get("sourceUrl") or ""
+            ])
+        
+        if rows:
+            ws.append_rows(rows, value_input_option="USER_ENTERED")
+
+    # Delete default Sheet1 if there are other sheets
+    try:
+        sheet1 = sh.worksheet("Sheet1")
+        if len(sh.worksheets()) > 1:
+            sh.del_worksheet(sheet1)
+    except Exception:
+        pass
+
+    return {
+        "status": "success",
+        "message": "Synced to Google Sheets successfully",
+        "spreadsheet_url": sh.url
+    }
+
+# --- OUTREACH CONFIGURATION ENDPOINTS ---
+
+class AddAccountRequest(BaseModel):
+    senderName: str
+    email: str
+    smtpHost: str = None
+    smtpPort: int = None
+    smtpUser: str = None
+    smtpPass: str = None
+    smtpEncryption: str = "SSL/TLS"
+    imapHost: str = None
+    imapPort: int = None
+    imapUser: str = None
+    imapPass: str = None
+    imapSsl: bool = True
+
+class TestAccountRequest(BaseModel):
+    smtpHost: str = None
+    smtpPort: int = None
+    smtpUser: str = None
+    smtpPass: str = None
+    smtpEncryption: str = "SSL/TLS"
+    imapHost: str = None
+    imapPort: int = None
+    imapUser: str = None
+    imapPass: str = None
+    imapSsl: bool = True
+
+class UpdateAccountRequest(BaseModel):
+    senderName: str
+    email: str
+    smtpHost: str = None
+    smtpPort: int = None
+    smtpUser: str = None
+    smtpPass: str = None
+    smtpEncryption: str = "SSL/TLS"
+    imapHost: str = None
+    imapPort: int = None
+    imapUser: str = None
+    imapPass: str = None
+    imapSsl: bool = True
+
+class OutreachSettingsUpdate(BaseModel):
+    timezone: str
+    activeDays: list
+    dailyVolume: int
+    minDelay: int
+    maxDelay: int
+    enableWarmup: bool
+    warmupStart: int = None
+    warmupStep: int = None
+    warmupLimit: int = None
+    signature: str = ""
+
+@router.get("/api/outreach/accounts")
+async def get_outreach_accounts_endpoint(
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_outreach_db)
+):
+    accounts = db.query(SqlEmailAccount).filter(SqlEmailAccount.user_id == user_id).all()
+    results = []
+    for a in accounts:
+        results.append({
+            "id": a.id,
+            "senderName": a.sender_name,
+            "email": a.email_address,
+            "smtpHost": a.smtp_host,
+            "smtpPort": a.smtp_port,
+            "smtpUser": a.smtp_username,
+            "smtpPass": "********",
+            "smtpEncryption": a.smtp_encryption,
+            "imapHost": a.imap_host,
+            "imapPort": a.imap_port,
+            "imapUser": a.imap_username,
+            "imapPass": "********",
+            "imapSsl": a.imap_ssl,
+            "isActive": a.is_active,
+            "smtpStatus": "Connected",
+            "imapStatus": "Connected",
+            "dailySent": 0,
+            "dailyLimit": 100
+        })
+    return {"status": "success", "accounts": results}
+
+@router.post("/api/outreach/accounts/test")
+async def test_outreach_account_endpoint(payload: TestAccountRequest):
+    smtp_res = test_smtp_connection(
+        host=payload.smtpHost,
+        port=payload.smtpPort,
+        username=payload.smtpUser,
+        password=payload.smtpPass,
+        encryption=payload.smtpEncryption
+    )
+    imap_res = test_imap_connection(
+        host=payload.imapHost,
+        port=payload.imapPort,
+        username=payload.imapUser,
+        password=payload.imapPass,
+        use_ssl=payload.imapSsl
+    )
+    
+    smtp_status = "Connected" if smtp_res["status"] == "success" else f"Failed: {smtp_res['message']}"
+    imap_status = "Connected" if imap_res["status"] == "success" else f"Failed: {imap_res['message']}"
+    
+    return {
+        "status": "success" if (smtp_res["status"] == "success" and imap_res["status"] == "success") else "error",
+        "smtpStatus": smtp_status,
+        "imapStatus": imap_status,
+        "smtpError": smtp_res.get("message") if smtp_res["status"] == "error" else None,
+        "imapError": imap_res.get("message") if imap_res["status"] == "error" else None
+    }
+
+@router.post("/api/outreach/accounts")
+async def add_outreach_account_endpoint(
+    payload: AddAccountRequest, 
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_outreach_db)
+):
+    # Check if duplicate email already exists in SQLite EmailAccount table
+    existing = db.query(SqlEmailAccount).filter(SqlEmailAccount.email_address == payload.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="An email account with this email address already exists.")
+        
+    # Run connection test first before saving
+    smtp_res = test_smtp_connection(
+        host=payload.smtpHost,
+        port=payload.smtpPort,
+        username=payload.smtpUser,
+        password=payload.smtpPass,
+        encryption=payload.smtpEncryption
+    )
+    if smtp_res["status"] == "error":
+        raise HTTPException(status_code=400, detail=f"SMTP Validation failed: {smtp_res['message']}")
+        
+    imap_res = test_imap_connection(
+        host=payload.imapHost,
+        port=payload.imapPort,
+        username=payload.imapUser,
+        password=payload.imapPass,
+        use_ssl=payload.imapSsl
+    )
+    if imap_res["status"] == "error":
+        raise HTTPException(status_code=400, detail=f"IMAP Validation failed: {imap_res['message']}")
+        
+    # Encrypt credentials
+    smtp_enc = outreach_crypto.encrypt(payload.smtpPass)
+    imap_enc = outreach_crypto.encrypt(payload.imapPass)
+    
+    new_acc = SqlEmailAccount(
+        user_id=user_id,
+        sender_name=payload.senderName.strip(),
+        email_address=payload.email.strip(),
+        smtp_host=payload.smtpHost.strip(),
+        smtp_port=payload.smtpPort,
+        smtp_username=payload.smtpUser.strip(),
+        smtp_password_encrypted=smtp_enc,
+        smtp_encryption=payload.smtpEncryption.strip(),
+        imap_host=payload.imapHost.strip(),
+        imap_port=payload.imapPort,
+        imap_username=payload.imapUser.strip(),
+        imap_password_encrypted=imap_enc,
+        imap_ssl=payload.imapSsl
+    )
+    
+    db.add(new_acc)
+    db.commit()
+    db.refresh(new_acc)
+    
+    return {
+        "status": "success",
+        "account": {
+            "id": new_acc.id,
+            "senderName": new_acc.sender_name,
+            "email": new_acc.email_address,
+            "smtpHost": new_acc.smtp_host,
+            "smtpPort": new_acc.smtp_port,
+            "smtpUser": new_acc.smtp_username,
+            "smtpPass": "********",
+            "smtpEncryption": new_acc.smtp_encryption,
+            "imapHost": new_acc.imap_host,
+            "imapPort": new_acc.imap_port,
+            "imapUser": new_acc.imap_username,
+            "imapPass": "********",
+            "imapSsl": new_acc.imap_ssl,
+            "isActive": new_acc.is_active,
+            "smtpStatus": "Connected",
+            "imapStatus": "Connected",
+            "dailySent": 0,
+            "dailyLimit": 100
+        }
+    }
+
+@router.put("/api/outreach/accounts/{acc_id}")
+async def update_outreach_account_endpoint(
+    acc_id: str, 
+    payload: UpdateAccountRequest, 
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_outreach_db)
+):
+    acc = db.query(SqlEmailAccount).filter(SqlEmailAccount.id == acc_id, SqlEmailAccount.user_id == user_id).first()
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+        
+    acc.sender_name = payload.senderName.strip()
+    acc.email_address = payload.email.strip()
+    acc.smtp_host = payload.smtpHost.strip()
+    acc.smtp_port = payload.smtpPort
+    acc.smtp_username = payload.smtpUser.strip()
+    acc.smtp_encryption = payload.smtpEncryption.strip()
+    acc.imap_host = payload.imapHost.strip()
+    acc.imap_port = payload.imapPort
+    acc.imap_username = payload.imapUser.strip()
+    acc.imap_ssl = payload.imapSsl
+    
+    if payload.smtpPass != "********" and payload.smtpPass.strip():
+        acc.smtp_password_encrypted = outreach_crypto.encrypt(payload.smtpPass)
+    if payload.imapPass != "********" and payload.imapPass.strip():
+        acc.imap_password_encrypted = outreach_crypto.encrypt(payload.imapPass)
+        
+    db.commit()
+    db.refresh(acc)
+    
+    return {
+        "status": "success",
+        "account": {
+            "id": acc.id,
+            "senderName": acc.sender_name,
+            "email": acc.email_address,
+            "smtpHost": acc.smtp_host,
+            "smtpPort": acc.smtp_port,
+            "smtpUser": acc.smtp_username,
+            "smtpPass": "********",
+            "smtpEncryption": acc.smtp_encryption,
+            "imapHost": acc.imap_host,
+            "imapPort": acc.imap_port,
+            "imapUser": acc.imap_username,
+            "imapPass": "********",
+            "imapSsl": acc.imap_ssl,
+            "isActive": acc.is_active,
+            "smtpStatus": "Connected",
+            "imapStatus": "Connected",
+            "dailySent": 0,
+            "dailyLimit": 100
+        }
+    }
+
+@router.put("/api/outreach/accounts/{acc_id}/toggle")
+async def toggle_outreach_account_endpoint(
+    acc_id: str, 
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_outreach_db)
+):
+    acc = db.query(SqlEmailAccount).filter(SqlEmailAccount.id == acc_id, SqlEmailAccount.user_id == user_id).first()
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+        
+    acc.is_active = not acc.is_active
+    db.commit()
+    db.refresh(acc)
+    
+    return {"status": "success", "isActive": acc.is_active}
+
+@router.delete("/api/outreach/accounts/{acc_id}")
+async def delete_outreach_account_endpoint(
+    acc_id: str, 
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_outreach_db)
+):
+    acc = db.query(SqlEmailAccount).filter(SqlEmailAccount.id == acc_id, SqlEmailAccount.user_id == user_id).first()
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+        
+    db.delete(acc)
+    db.commit()
+    
+    return {"status": "success", "message": "Account deleted successfully"}
+
+@router.get("/api/outreach/settings")
+async def get_outreach_settings_endpoint(
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_outreach_db)
+):
+    settings = db.query(SqlOutreachSettings).filter(SqlOutreachSettings.user_id == user_id).first()
+    if not settings:
+        default_settings = {
+            "timezone": "UTC",
+            "activeDays": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+            "dailyVolume": 150,
+            "minDelay": 60,
+            "maxDelay": 300,
+            "enableWarmup": True,
+            "warmupStart": 10,
+            "warmupStep": 5,
+            "warmupLimit": 50,
+            "signature": "<p>Best regards,<br><strong>{{sender_name}}</strong><br>{{job_title}} at {{company}}</p>"
+        }
+        return {"status": "success", "settings": default_settings}
+        
+    return {
+        "status": "success",
+        "settings": {
+            "timezone": settings.timezone,
+            "activeDays": settings.active_days or [],
+            "dailyVolume": settings.max_emails_per_day,
+            "minDelay": settings.min_delay_seconds,
+            "maxDelay": settings.max_delay_seconds,
+            "signature": settings.signature_html or "",
+            "enableWarmup": settings.enable_warmup,
+            "warmupStart": settings.warmup_start_count,
+            "warmupStep": settings.warmup_daily_increase,
+            "warmupLimit": settings.warmup_max_count
+        }
+    }
+
+@router.put("/api/outreach/settings")
+async def update_outreach_settings_endpoint(
+    payload: OutreachSettingsUpdate, 
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_outreach_db)
+):
+    settings = db.query(SqlOutreachSettings).filter(SqlOutreachSettings.user_id == user_id).first()
+    if not settings:
+        settings = SqlOutreachSettings(user_id=user_id)
+        db.add(settings)
+        
+    settings.timezone = payload.timezone
+    settings.active_days = payload.activeDays
+    settings.max_emails_per_day = payload.dailyVolume
+    settings.min_delay_seconds = payload.minDelay
+    settings.max_delay_seconds = payload.maxDelay
+    settings.signature_html = payload.signature
+    settings.enable_warmup = payload.enableWarmup
+    settings.warmup_start_count = payload.warmupStart
+    settings.warmup_daily_increase = payload.warmupStep
+    settings.warmup_max_count = payload.warmupLimit
+    
+    db.commit()
+    db.refresh(settings)
+    
+    return {
+        "status": "success",
+        "settings": {
+            "timezone": settings.timezone,
+            "activeDays": settings.active_days or [],
+            "dailyVolume": settings.max_emails_per_day,
+            "minDelay": settings.min_delay_seconds,
+            "maxDelay": settings.max_delay_seconds,
+            "signature": settings.signature_html or "",
+            "enableWarmup": settings.enable_warmup,
+            "warmupStart": settings.warmup_start_count,
+            "warmupStep": settings.warmup_daily_increase,
+            "warmupLimit": settings.warmup_max_count
+        }
+    }
+
+# --- TEMPLATE OUTREACH CONFIGURATION ENDPOINTS ---
+
+class OutreachConfigPayload(BaseModel):
+    imap_server: str
+    imap_port: str
+    imap_email: str
+    imap_password: str
+
+class WebhookConfigPayload(BaseModel):
+    webhook_url: str
+
+class PlacesConfigPayload(BaseModel):
+    places_api_key: str
+
+class TwitterConfigPayload(BaseModel):
+    twitter_api_key: str
+
+class ModelConfigPayload(BaseModel):
+    active_provider: str
+    providers: dict
+    workspace_dir: Optional[str] = "output"
+    memory: Optional[dict] = None
+
+class GoogleSheetsConfigPayload(BaseModel):
+    sheet_id: str
+
+class UpdateProfileRequest(BaseModel):
+    displayName: Optional[str] = None
+    businessName: Optional[str] = None
+    agencyInfo: Optional[str] = None
+
+@router.get("/api/user/profile")
+async def get_user_profile_endpoint(user_id: str = Depends(get_current_user_id)):
+    # Get user details
+    coll_users = db_manager.get_collection("users")
+    if coll_users is not None:
+        user = coll_users.find_one({"id": user_id})
+    else:
+        user = db_manager.json_db.find_one("users", {"id": user_id})
+        
+    if not user:
+        user = {}
+        
+    # Get counts
+    coll_leads = db_manager.get_collection("leads")
+    coll_searches = db_manager.get_collection("searches")
+    
+    if coll_leads is not None:
+        leads_count = coll_leads.count_documents({"userId": user_id})
+        qualified_count = coll_leads.count_documents({
+            "userId": user_id, 
+            "leadCategory": {"$in": ["High Intent", "Medium Intent"]}
+        })
+        drafted_count = coll_leads.count_documents({
+            "userId": user_id,
+            "crmStatus": {"$in": ["Drafted", "drafted"]}
+        })
+        emailed_count = coll_leads.count_documents({
+            "userId": user_id,
+            "crmStatus": {"$in": ["Emailed", "emailed"]}
+        })
+        replied_count = coll_leads.count_documents({
+            "userId": user_id,
+            "crmStatus": {"$in": ["Replied", "replied"]}
+        })
+    else:
+        leads_list = db_manager.json_db.find("leads", {"userId": user_id})
+        leads_count = len(leads_list)
+        qualified_count = len([l for l in leads_list if l.get("leadCategory") in ["High Intent", "Medium Intent"]])
+        drafted_count = len([l for l in leads_list if l.get("crmStatus") in ["Drafted", "drafted"]])
+        emailed_count = len([l for l in leads_list if l.get("crmStatus") in ["Emailed", "emailed"]])
+        replied_count = len([l for l in leads_list if l.get("crmStatus") in ["Replied", "replied"]])
+        
+    if coll_searches is not None:
+        scans_count = coll_searches.count_documents({"userId": user_id})
+    else:
+        scans_count = len(db_manager.json_db.find("searches", {"userId": user_id}))
+        
+    rate = int((qualified_count / leads_count) * 100) if leads_count > 0 else 0
+    
+    # Load integrations to find webhookUrl
+    coll_int = db_manager.get_collection("integrations")
+    if coll_int is not None:
+        cfg = coll_int.find_one({"userId": user_id}) or {}
+    else:
+        cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
+        
+    return {
+        "status": "success",
+        "profile": {
+            "email": user.get("email") or "user@mapflow-ai.com",
+            "displayName": user.get("fullName") or (user.get("email") or "user").split("@")[0].capitalize(),
+            "businessName": user.get("companyName") or "My Business",
+            "agencyInfo": user.get("bio") or "premier design & development services",
+            "joinedDate": user.get("createdAt") or datetime.datetime.utcnow().isoformat(),
+            "apiToken": user_id,
+            "webhookUrl": cfg.get("webhookUrl") or ""
+        },
+        "stats": {
+            "scansCount": scans_count,
+            "leadsCount": leads_count,
+            "qualifiedLeadsCount": qualified_count,
+            "qualificationRate": rate,
+            "draftedCount": drafted_count,
+            "emailedCount": emailed_count,
+            "repliedCount": replied_count
+        }
+    }
+
+@router.post("/api/user/profile/update")
+async def update_user_profile_endpoint(payload: UpdateProfileRequest, user_id: str = Depends(get_current_user_id)):
+    coll_users = db_manager.get_collection("users")
+    update_data = {}
+    if payload.displayName is not None:
+        update_data["fullName"] = payload.displayName.strip()
+    if payload.businessName is not None:
+        update_data["companyName"] = payload.businessName.strip()
+    if payload.agencyInfo is not None:
+        update_data["bio"] = payload.agencyInfo.strip()
+        
+    if update_data:
+        if coll_users is not None:
+            coll_users.update_one({"id": user_id}, {"$set": update_data})
+        else:
+            db_manager.json_db.update_one("users", {"id": user_id}, {"$set": update_data})
+            
+    return {"status": "success", "message": "Profile updated successfully"}
+
+@router.get("/api/outreach/config")
+async def get_outreach_config_endpoint(user_id: str = Depends(get_current_user_id)):
+    coll = db_manager.get_collection("integrations")
+    if coll is not None:
+        cfg = coll.find_one({"userId": user_id}) or {}
+    else:
+        cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
+        
+    return {
+        "status": "success",
+        "config": {
+            "imap_server": cfg.get("imapHost") or "",
+            "imap_port": cfg.get("imapPort") or "993",
+            "imap_email": cfg.get("imapUsername") or "",
+            "imap_password": "********" if cfg.get("imapPassword") else ""
+        }
+    }
+
+@router.post("/api/outreach/config")
+async def save_outreach_config_endpoint(payload: OutreachConfigPayload, user_id: str = Depends(get_current_user_id)):
+    coll = db_manager.get_collection("integrations")
+    
+    update_data = {
+        "imapHost": payload.imap_server.strip(),
+        "imapPort": payload.imap_port.strip(),
+        "imapUsername": payload.imap_email.strip()
+    }
+    
+    # Check if we should update password
+    if payload.imap_password != "********" and payload.imap_password.strip():
+        update_data["imapPassword"] = payload.imap_password
+        
+    if coll is not None:
+        coll.update_one({"userId": user_id}, {"$set": update_data}, upsert=True)
+    else:
+        existing = db_manager.json_db.find_one("integrations", {"userId": user_id})
+        if existing:
+            db_manager.json_db.update_one("integrations", {"userId": user_id}, {"$set": update_data})
+        else:
+            update_data["userId"] = user_id
+            db_manager.json_db.insert_one("integrations", update_data)
+            
+    return {"status": "success", "message": "Email settings saved successfully"}
+
+@router.post("/api/outreach/sync-replies")
+async def sync_replies_endpoint(user_id: str = Depends(get_current_user_id)):
+    # 1. Load user's integrations configuration
+    coll = db_manager.get_collection("integrations")
+    if coll is not None:
+        cfg = coll.find_one({"userId": user_id}) or {}
+    else:
+        cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
+        
+    imap_host = cfg.get("imapHost")
+    imap_port_str = cfg.get("imapPort") or "993"
+    imap_email = cfg.get("imapUsername")
+    imap_password = cfg.get("imapPassword")
+    
+    if not imap_host or not imap_email or not imap_password:
+        raise HTTPException(
+            status_code=400,
+            detail="IMAP sync settings are not configured. Please fill in your Email Sync settings first."
+        )
+        
+    try:
+        imap_port = int(imap_port_str)
+    except ValueError:
+        imap_port = 993
+
+    # 2. Connect to the IMAP server
+    try:
+        mail = imaplib.IMAP4_SSL(imap_host, imap_port, timeout=15)
+        mail.login(imap_email, imap_password)
+        mail.select("inbox")
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"IMAP connection or authentication failed: {str(e)}"
+        )
+
+    # 3. Search for emails received in the last 14 days
+    since_date = (datetime.date.today() - datetime.timedelta(days=14)).strftime("%d-%b-%Y")
+    try:
+        status, messages = mail.search(None, f'(SINCE "{since_date}")')
+        if status != "OK":
+            mail.close()
+            mail.logout()
+            return {"status": "success", "newRepliesCount": 0, "replies": []}
+    except Exception as e:
+        try:
+            mail.close()
+            mail.logout()
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=500,
+            detail=f"IMAP search failed: {str(e)}"
+        )
+
+    email_ids = messages[0].split()
+    inbox_emails = {}
+    
+    # Iterate over the messages to fetch headers
+    for mail_id in email_ids:
+        try:
+            res, msg_data = mail.fetch(mail_id, '(RFC822.HEADER)')
+            if res != "OK":
+                continue
+            
+            for response_part in msg_data:
+                if isinstance(response_part, tuple):
+                    msg = email.message_from_bytes(response_part[1])
+                    from_header = msg.get("From")
+                    subject_header = msg.get("Subject")
+                    date_header = msg.get("Date")
+                    
+                    if not from_header:
+                        continue
+                    
+                    # Extract email address
+                    email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', from_header)
+                    if not email_match:
+                        continue
+                    sender_email = email_match.group(0).lower().strip()
+                    
+                    # Decode subject header
+                    subject_str = "Re: Outreach"
+                    if subject_header:
+                        try:
+                            decoded_parts = email.header.decode_header(subject_header)
+                            subject_parts = []
+                            for part, encoding in decoded_parts:
+                                if isinstance(part, bytes):
+                                    subject_parts.append(part.decode(encoding or "utf-8", errors="ignore"))
+                                else:
+                                    subject_parts.append(str(part))
+                            subject_str = "".join(subject_parts)
+                        except Exception:
+                            subject_str = str(subject_header)
+                            
+                    # Parse date header
+                    parsed_date = datetime.datetime.utcnow().isoformat()
+                    if date_header:
+                        try:
+                            t = email.utils.parsedate_to_datetime(date_header)
+                            parsed_date = t.isoformat()
+                        except Exception:
+                            pass
+                            
+                    if sender_email not in inbox_emails:
+                        inbox_emails[sender_email] = []
+                    
+                    inbox_emails[sender_email].append({
+                        "id": mail_id,
+                        "subject": subject_str,
+                        "receivedAt": parsed_date
+                    })
+        except Exception as e:
+            print(f"Error reading email header: {e}")
+            continue
+
+    # 4. Cross-reference with our Leads DB
+    db = load_db(user_id)
+    new_replies = []
+    
+    for lead in db.values():
+        lead_email = (lead.get("contactInfo") or "").lower().strip()
+        if not lead_email:
+            continue
+            
+        if lead_email in inbox_emails:
+            matching_messages = inbox_emails[lead_email]
+            
+            if "receivedReplies" not in lead:
+                lead["receivedReplies"] = []
+                
+            existing_dates = {r.get("receivedAt") for r in lead["receivedReplies"]}
+            
+            for msg_meta in matching_messages:
+                if msg_meta["receivedAt"] in existing_dates:
+                    continue
+                    
+                body_content = "No body content"
+                try:
+                    res, body_data = mail.fetch(msg_meta["id"], '(RFC822)')
+                    if res == "OK":
+                        for response_part in body_data:
+                            if isinstance(response_part, tuple):
+                                full_msg = email.message_from_bytes(response_part[1])
+                                if full_msg.is_multipart():
+                                    for part in full_msg.walk():
+                                        content_type = part.get_content_type()
+                                        content_disposition = str(part.get("Content-Disposition"))
+                                        if content_type == "text/plain" and "attachment" not in content_disposition:
+                                            try:
+                                                body_content = part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", errors="ignore")
+                                                break
+                                            except Exception:
+                                                pass
+                                else:
+                                    try:
+                                        body_content = full_msg.get_payload(decode=True).decode(full_msg.get_content_charset() or "utf-8", errors="ignore")
+                                    except Exception:
+                                        pass
+                except Exception as body_err:
+                    print(f"Failed to fetch body for email {msg_meta['id']}: {body_err}")
+                
+                cleaned_body = body_content.strip()
+                if len(cleaned_body) > 1000:
+                    cleaned_body = cleaned_body[:1000] + "... (truncated)"
+                    
+                new_reply_obj = {
+                    "subject": msg_meta["subject"],
+                    "receivedAt": msg_meta["receivedAt"],
+                    "body": cleaned_body
+                }
+                
+                lead["receivedReplies"].append(new_reply_obj)
+                lead["crmStatus"] = "Replied"
+                
+                new_replies.append({
+                    "companyName": lead.get("companyName") or "Unknown Business",
+                    "email": lead_email
+                })
+                
+    # 5. Save lead updates to database
+    if new_replies:
+        save_db(db, user_id)
+
+    # 6. Safely log out from IMAP
+    try:
+        mail.close()
+        mail.logout()
+    except Exception:
+        pass
+
+    return {
+        "status": "success",
+        "newRepliesCount": len(new_replies),
+        "replies": new_replies
+    }
+
+@router.get("/api/model-config")
+async def get_model_config_endpoint(user_id: str = Depends(get_current_user_id)):
+    coll = db_manager.get_collection("integrations")
+    if coll is not None:
+        cfg = coll.find_one({"userId": user_id}) or {}
+    else:
+        cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
+        
+    default_config = {
+        "active_provider": "groq",
+        "providers": {
+            "groq": {
+                "model": "llama-3.3-70b-versatile",
+                "temperature": 0.7
+            }
+        }
+    }
+    return cfg.get("modelConfig") or default_config
+
+@router.post("/api/model-config")
+async def update_model_config_endpoint(payload: ModelConfigPayload, user_id: str = Depends(get_current_user_id)):
+    coll = db_manager.get_collection("integrations")
+    
+    update_data = {
+        "modelConfig": payload.dict()
+    }
+    
+    if coll is not None:
+        coll.update_one({"userId": user_id}, {"$set": update_data}, upsert=True)
+    else:
+        existing = db_manager.json_db.find_one("integrations", {"userId": user_id})
+        if existing:
+            db_manager.json_db.update_one("integrations", {"userId": user_id}, {"$set": update_data})
+        else:
+            update_data["userId"] = user_id
+            db_manager.json_db.insert_one("integrations", update_data)
+            
+    return {"status": "success", "config": payload.dict()}
+
+@router.get("/api/outreach/places")
+async def get_places_endpoint(user_id: str = Depends(get_current_user_id)):
+    coll = db_manager.get_collection("integrations")
+    if coll is not None:
+        cfg = coll.find_one({"userId": user_id}) or {}
+    else:
+        cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
+        
+    api_key = cfg.get("googlePlacesApiKey") or ""
+    masked_key = ""
+    if api_key:
+        if len(api_key) <= 8:
+            masked_key = "********"
+        else:
+            masked_key = f"{api_key[:4]}********{api_key[-4:]}"
+            
+    return {"status": "success", "places_api_key": masked_key, "is_configured": bool(api_key)}
+
+@router.post("/api/outreach/places")
+async def save_places_endpoint(payload: PlacesConfigPayload, user_id: str = Depends(get_current_user_id)):
+    coll = db_manager.get_collection("integrations")
+    key_to_save = payload.places_api_key.strip()
+    
+    if "********" in key_to_save:
+        # Keep existing key
+        if coll is not None:
+            cfg = coll.find_one({"userId": user_id}) or {}
+        else:
+            cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
+        key_to_save = cfg.get("googlePlacesApiKey") or ""
+        
+    update_data = {"googlePlacesApiKey": key_to_save}
+    
+    if coll is not None:
+        coll.update_one({"userId": user_id}, {"$set": update_data}, upsert=True)
+    else:
+        existing = db_manager.json_db.find_one("integrations", {"userId": user_id})
+        if existing:
+            db_manager.json_db.update_one("integrations", {"userId": user_id}, {"$set": update_data})
+        else:
+            update_data["userId"] = user_id
+            db_manager.json_db.insert_one("integrations", update_data)
+            
+    return {"status": "success", "message": "Places API Key saved successfully"}
+
+@router.get("/api/outreach/twitter")
+async def get_twitter_endpoint(user_id: str = Depends(get_current_user_id)):
+    coll = db_manager.get_collection("integrations")
+    if coll is not None:
+        cfg = coll.find_one({"userId": user_id}) or {}
+    else:
+        cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
+        
+    api_key = cfg.get("twitterApiKey") or ""
+    masked_key = ""
+    if api_key:
+        if len(api_key) <= 8:
+            masked_key = "********"
+        else:
+            masked_key = f"{api_key[:4]}********{api_key[-4:]}"
+            
+    return {"status": "success", "twitter_api_key": masked_key, "is_configured": bool(api_key)}
+
+@router.post("/api/outreach/twitter")
+async def save_twitter_endpoint(payload: TwitterConfigPayload, user_id: str = Depends(get_current_user_id)):
+    coll = db_manager.get_collection("integrations")
+    key_to_save = payload.twitter_api_key.strip()
+    
+    if "********" in key_to_save:
+        # Keep existing key
+        if coll is not None:
+            cfg = coll.find_one({"userId": user_id}) or {}
+        else:
+            cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
+        key_to_save = cfg.get("twitterApiKey") or ""
+        
+    update_data = {"twitterApiKey": key_to_save}
+    
+    if coll is not None:
+        coll.update_one({"userId": user_id}, {"$set": update_data}, upsert=True)
+    else:
+        existing = db_manager.json_db.find_one("integrations", {"userId": user_id})
+        if existing:
+            db_manager.json_db.update_one("integrations", {"userId": user_id}, {"$set": update_data})
+        else:
+            update_data["userId"] = user_id
+            db_manager.json_db.insert_one("integrations", update_data)
+            
+    return {"status": "success", "message": "Twitter API Key saved successfully"}
+
+@router.get("/api/outreach/webhook")
+async def get_webhook_endpoint(user_id: str = Depends(get_current_user_id)):
+    coll = db_manager.get_collection("integrations")
+    if coll is not None:
+        cfg = coll.find_one({"userId": user_id}) or {}
+    else:
+        cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
+        
+    return {"status": "success", "webhook_url": cfg.get("webhookUrl") or ""}
+
+@router.post("/api/outreach/webhook")
+async def save_webhook_endpoint(payload: WebhookConfigPayload, user_id: str = Depends(get_current_user_id)):
+    coll = db_manager.get_collection("integrations")
+    update_data = {"webhookUrl": payload.webhook_url.strip()}
+    
+    if coll is not None:
+        coll.update_one({"userId": user_id}, {"$set": update_data}, upsert=True)
+    else:
+        existing = db_manager.json_db.find_one("integrations", {"userId": user_id})
+        if existing:
+            db_manager.json_db.update_one("integrations", {"userId": user_id}, {"$set": update_data})
+        else:
+            update_data["userId"] = user_id
+            db_manager.json_db.insert_one("integrations", update_data)
+            
+    return {"status": "success", "message": "Webhook URL saved successfully"}
+
+@router.get("/api/config/google-sheets")
+async def get_google_sheets_config_endpoint(user_id: str = Depends(get_current_user_id)):
+    coll = db_manager.get_collection("integrations")
+    if coll is not None:
+        cfg = coll.find_one({"userId": user_id}) or {}
+    else:
+        cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
+        
+    sheet_id = cfg.get("googleSheetId") or ""
+    
+    # Check if google_credentials.json file exists
+    creds_path = "google_credentials.json"
+    credentials_active = os.path.exists(creds_path)
+    
+    client_email = None
+    if credentials_active:
+        try:
+            with open(creds_path, "r") as f:
+                creds_data = json.load(f)
+                client_email = creds_data.get("client_email")
+        except Exception:
+            client_email = "google-sheets-sync@mapflow-ai.iam.gserviceaccount.com"
+    
+    return {
+        "status": "success",
+        "sheet_id": sheet_id,
+        "client_email": client_email,
+        "credentials_active": credentials_active
+    }
+
+@router.post("/api/config/google-sheets")
+async def save_google_sheets_config_endpoint(payload: GoogleSheetsConfigPayload, user_id: str = Depends(get_current_user_id)):
+    coll = db_manager.get_collection("integrations")
+    update_data = {"googleSheetId": payload.sheet_id.strip()}
+    
+    if coll is not None:
+        coll.update_one({"userId": user_id}, {"$set": update_data}, upsert=True)
+    else:
+        existing = db_manager.json_db.find_one("integrations", {"userId": user_id})
+        if existing:
+            db_manager.json_db.update_one("integrations", {"userId": user_id}, {"$set": update_data})
+        else:
+            update_data["userId"] = user_id
+            db_manager.json_db.insert_one("integrations", update_data)
+            
+    return {"status": "success", "message": "Google Sheet ID saved successfully"}
