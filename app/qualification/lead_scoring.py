@@ -57,15 +57,15 @@ def calculate_lead_score(lead: dict, user_profile: dict = None) -> dict:
 
     if profile_score is not None:
         lead["leadScore"] = profile_score
-        if profile_score >= 70:
+        if profile_score >= 75:
             lead["leadCategory"] = "High Intent"
             lead["leadStatus"] = "Qualified"
-        elif profile_score >= 50:
+        elif profile_score >= 40:
             lead["leadCategory"] = "Medium Intent"
-            lead["leadStatus"] = "Warm Lead"
+            lead["leadStatus"] = "Potential Lead"
         else:
             lead["leadCategory"] = "Low Intent"
-            lead["leadStatus"] = "Potential Lead"
+            lead["leadStatus"] = "Warm Lead"
             
         if lead.get("isConverted"):
             lead["leadStatus"] = "Warm Lead"
@@ -118,7 +118,7 @@ def calculate_lead_score(lead: dict, user_profile: dict = None) -> dict:
             category = "Low Intent"
             total_score = min(total_score, 35)
         else:
-            if total_score >= 70:
+            if total_score >= 75:
                 category = "High Intent"
             elif total_score >= 40:
                 category = "Medium Intent"
@@ -127,12 +127,12 @@ def calculate_lead_score(lead: dict, user_profile: dict = None) -> dict:
                 
         lead["leadScore"] = total_score
         lead["leadCategory"] = category
-        if category == "High Intent":
+        if total_score >= 75:
             lead["leadStatus"] = "Qualified"
-        elif category == "Medium Intent":
-            lead["leadStatus"] = "Warm Lead"
-        else:
+        elif total_score >= 40:
             lead["leadStatus"] = "Potential Lead"
+        else:
+            lead["leadStatus"] = "Warm Lead"
             
         if lead.get("isConverted"):
             lead["leadStatus"] = "Warm Lead"
@@ -188,7 +188,7 @@ def calculate_lead_score(lead: dict, user_profile: dict = None) -> dict:
         category = "Low Intent"
         total_score = min(total_score, 35)  # Cap the score to reflect lack of true buying intent
     else:
-        if total_score >= 70:
+        if total_score >= 75:
             category = "High Intent"
         elif total_score >= 40:
             category = "Medium Intent"
@@ -197,12 +197,12 @@ def calculate_lead_score(lead: dict, user_profile: dict = None) -> dict:
 
     lead["leadScore"] = total_score
     lead["leadCategory"] = category
-    if category == "High Intent":
+    if total_score >= 75:
         lead["leadStatus"] = "Qualified"
-    elif category == "Medium Intent":
-        lead["leadStatus"] = "Warm Lead"
-    else:
+    elif total_score >= 40:
         lead["leadStatus"] = "Potential Lead"
+    else:
+        lead["leadStatus"] = "Warm Lead"
         
     if lead.get("isConverted"):
         lead["leadStatus"] = "Warm Lead"
