@@ -1,8 +1,8 @@
 import uuid
 import random
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Depends
 from app.schemas.schemas import UserSignUp, UserLogin, OTPVerify, ResendOTPRequest, ForgotPasswordRequest, ResetPasswordRequest
-from app.core.security import get_password_hash, verify_password, create_access_token
+from app.core.security import get_password_hash, verify_password, create_access_token, get_current_user_id
 from app.core.database import db_manager
 from app.services.credit_service import CreditService
 from app.services.email_service import EmailService
@@ -205,5 +205,38 @@ def reset_password(req: ResetPasswordRequest):
     return {
         "success": True,
         "message": "Password reset successfully. You can now sign in with your new password."
+    }
+
+from pydantic import BaseModel
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+@router.post("/change-password")
+def change_password(req: ChangePasswordRequest, user_id: str = Depends(get_current_user_id)):
+    coll = db_manager.get_collection("users")
+    if coll is not None:
+        user = coll.find_one({"id": user_id})
+    else:
+        user = db_manager.json_db.find_one("users", {"id": user_id})
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User account not found")
+
+    # Verify current password
+    if not verify_password(req.current_password, user.get("passwordHash", "")):
+        raise HTTPException(status_code=400, detail="Incorrect current password")
+
+    new_hash = get_password_hash(req.new_password)
+    
+    if coll is not None:
+        coll.update_one({"id": user_id}, {"$set": {"passwordHash": new_hash}})
+    else:
+        db_manager.json_db.update_one("users", {"id": user_id}, {"$set": {"passwordHash": new_hash}})
+
+    return {
+        "success": True,
+        "message": "Password updated successfully!"
     }
 
