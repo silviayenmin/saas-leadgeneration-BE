@@ -500,12 +500,19 @@ async def perform_search_background(task_id: str, payload: SearchRequest, user_i
             
         db = load_db(user_id)
         
+        # Load user integrations config for custom API keys
+        coll_int = db_manager.get_collection("integrations")
+        if coll_int is not None:
+            user_cfg = coll_int.find_one({"userId": user_id}) or {}
+        else:
+            user_cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
+
         for plat in platforms:
             adapter = get_adapter(plat)
             for q in intent_queries:
                 try:
                     if plat == "google_maps":
-                        places_key = settings.GOOGLE_PLACES_API_KEY
+                        places_key = user_cfg.get("placesApiKey") or settings.GOOGLE_PLACES_API_KEY
                         
                         # Extract exclusion sets to skip duplicate scraping
                         exclude_urls = set()
@@ -1393,30 +1400,58 @@ Subject: [Subject Line]
     try:
         from app.qualification.lead_classifier import clean_json_response
         import httpx
-        api_key = settings.GROQ_API_KEY
+        
+        # Load user's LLM configuration from integrations
+        coll_int = db_manager.get_collection("integrations")
+        if coll_int is not None:
+            cfg = coll_int.find_one({"userId": user_id}) or {}
+        else:
+            cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
+            
+        model_conf = cfg.get("modelConfig") or {}
+        active_provider = model_conf.get("active_provider", "groq")
+        providers = model_conf.get("providers") or {}
+        prov_conf = providers.get(active_provider) or {}
+        
+        # Defaults based on modelConfig
+        api_model = prov_conf.get("model")
+        api_temp = prov_conf.get("temperature", 0.7)
+        api_url = prov_conf.get("base_url") or "http://localhost:11434"
+        
         pitch_content = ""
-        if api_key and api_key.strip():
-            url = "https://api.groq.com/openai/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
+        
+        if active_provider == "groq":
+            api_key = settings.GROQ_API_KEY
+            if not api_model:
+                api_model = "llama-3.3-70b-versatile"
+                
+            if api_key and api_key.strip():
+                url = "https://api.groq.com/openai/v1/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                }
+                json_payload = {
+                    "model": api_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": api_temp
+                }
+                with httpx.Client(timeout=25.0) as client:
+                    res = client.post(url, headers=headers, json=json_payload)
+                    if res.status_code == 200:
+                        pitch_content = res.json()["choices"][0]["message"]["content"]
+        else:
+            # Ollama
+            if not api_model:
+                api_model = "llama3.1:8b"
+            url = f"{api_url.rstrip('/')}/api/generate"
             json_payload = {
-                "model": "groq/compound-mini",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.7
-            }
-            with httpx.Client(timeout=25.0) as client:
-                res = client.post(url, headers=headers, json=json_payload)
-                if res.status_code == 200:
-                    pitch_content = res.json()["choices"][0]["message"]["content"]
-                    
-        if not pitch_content:
-            url = f"{settings.OLLAMA_BASE_URL}/api/generate"
-            json_payload = {
-                "model": "llama3.1:8b",
+                "model": api_model,
                 "prompt": prompt,
-                "stream": False
+                "stream": False,
+                "options": {
+                    "temperature": api_temp
+                }
             }
             with httpx.Client(timeout=30.0) as client:
                 res = client.post(url, json=json_payload)
@@ -2141,43 +2176,53 @@ async def save_outreach_config_endpoint(payload: OutreachConfigPayload, user_id:
             
     return {"status": "success", "message": "Email settings saved successfully"}
 
-@router.post("/api/outreach/sync-replies")
-async def sync_replies_endpoint(user_id: str = Depends(get_current_user_id)):
-    # 1. Load user's integrations configuration
-    coll = db_manager.get_collection("integrations")
-    if coll is not None:
-        cfg = coll.find_one({"userId": user_id}) or {}
-    else:
-        cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
-        
+async def trigger_replied_webhook(webhook_url: str, lead_data: dict):
+    if not webhook_url:
+        return
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5) as client:
+            payload = {
+                "event": "lead.replied",
+                "timestamp": datetime.datetime.utcnow().isoformat(),
+                "lead": {
+                    "companyName": lead_data.get("companyName"),
+                    "email": lead_data.get("contactInfo"),
+                    "location": lead_data.get("location"),
+                    "phone": lead_data.get("phone"),
+                    "crmStatus": "Replied",
+                    "receivedReplies": lead_data.get("receivedReplies", [])
+                }
+            }
+            await client.post(webhook_url, json=payload)
+    except Exception as e:
+        print(f"Failed to trigger webhook for {webhook_url}: {e}")
+
+async def sync_replies_for_user(user_id: str, cfg: dict) -> dict:
     imap_host = cfg.get("imapHost")
     imap_port_str = cfg.get("imapPort") or "993"
     imap_email = cfg.get("imapUsername")
     imap_password = cfg.get("imapPassword")
+    webhook_url = cfg.get("webhookUrl")
     
     if not imap_host or not imap_email or not imap_password:
-        raise HTTPException(
-            status_code=400,
-            detail="IMAP sync settings are not configured. Please fill in your Email Sync settings first."
-        )
+        return {"status": "success", "newRepliesCount": 0, "replies": []}
         
     try:
         imap_port = int(imap_port_str)
     except ValueError:
         imap_port = 993
 
-    # 2. Connect to the IMAP server
+    # Connect to the IMAP server
     try:
         mail = imaplib.IMAP4_SSL(imap_host, imap_port, timeout=15)
         mail.login(imap_email, imap_password)
         mail.select("inbox")
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"IMAP connection or authentication failed: {str(e)}"
-        )
+        print(f"IMAP connection failed for user {user_id}: {e}")
+        return {"status": "error", "message": f"Connection failed: {str(e)}"}
 
-    # 3. Search for emails received in the last 14 days
+    # Search for emails in last 14 days
     since_date = (datetime.date.today() - datetime.timedelta(days=14)).strftime("%d-%b-%Y")
     try:
         status, messages = mail.search(None, f'(SINCE "{since_date}")')
@@ -2186,82 +2231,112 @@ async def sync_replies_endpoint(user_id: str = Depends(get_current_user_id)):
             mail.logout()
             return {"status": "success", "newRepliesCount": 0, "replies": []}
     except Exception as e:
+        print(f"IMAP search failed for user {user_id}: {e}")
         try:
             mail.close()
             mail.logout()
         except Exception:
             pass
-        raise HTTPException(
-            status_code=500,
-            detail=f"IMAP search failed: {str(e)}"
-        )
+        return {"status": "error", "message": f"Search failed: {str(e)}"}
 
     email_ids = messages[0].split()
     inbox_emails = {}
     
-    # Iterate over the messages to fetch headers
-    for mail_id in email_ids:
+    # Iterate over the messages to fetch headers in a single batch call
+    if email_ids:
+        message_set = b",".join(email_ids)
         try:
-            res, msg_data = mail.fetch(mail_id, '(RFC822.HEADER)')
-            if res != "OK":
-                continue
-            
-            for response_part in msg_data:
-                if isinstance(response_part, tuple):
-                    msg = email.message_from_bytes(response_part[1])
-                    from_header = msg.get("From")
-                    subject_header = msg.get("Subject")
-                    date_header = msg.get("Date")
-                    
-                    if not from_header:
-                        continue
-                    
-                    # Extract email address
-                    email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', from_header)
-                    if not email_match:
-                        continue
-                    sender_email = email_match.group(0).lower().strip()
-                    
-                    # Decode subject header
-                    subject_str = "Re: Outreach"
-                    if subject_header:
-                        try:
-                            decoded_parts = email.header.decode_header(subject_header)
-                            subject_parts = []
-                            for part, encoding in decoded_parts:
-                                if isinstance(part, bytes):
-                                    subject_parts.append(part.decode(encoding or "utf-8", errors="ignore"))
-                                else:
-                                    subject_parts.append(str(part))
-                            subject_str = "".join(subject_parts)
-                        except Exception:
-                            subject_str = str(subject_header)
-                            
-                    # Parse date header
-                    parsed_date = datetime.datetime.utcnow().isoformat()
-                    if date_header:
-                        try:
-                            t = email.utils.parsedate_to_datetime(date_header)
-                            parsed_date = t.isoformat()
-                        except Exception:
-                            pass
-                            
-                    if sender_email not in inbox_emails:
-                        inbox_emails[sender_email] = []
-                    
-                    inbox_emails[sender_email].append({
-                        "id": mail_id,
-                        "subject": subject_str,
-                        "receivedAt": parsed_date
-                    })
+            res, msg_data = mail.fetch(message_set, '(RFC822.HEADER)')
+            if res == "OK":
+                for response_part in msg_data:
+                    if isinstance(response_part, tuple):
+                        # Extract the mail ID from the response part prefix (e.g. b'123 (RFC822.HEADER {456}')
+                        part_prefix = response_part[0].decode("utf-8", errors="ignore")
+                        id_match = re.match(r'^(\d+)', part_prefix)
+                        if not id_match:
+                            continue
+                        curr_mail_id = id_match.group(1).encode("utf-8")
+                        
+                        msg = email.message_from_bytes(response_part[1])
+                        from_header = msg.get("From")
+                        subject_header = msg.get("Subject")
+                        date_header = msg.get("Date")
+                        
+                        if not from_header:
+                            continue
+                        
+                        # Extract email address
+                        email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', from_header)
+                        if not email_match:
+                            continue
+                        sender_email = email_match.group(0).lower().strip()
+                        
+                        # Decode subject header
+                        subject_str = "Re: Outreach"
+                        if subject_header:
+                            try:
+                                decoded_parts = email.header.decode_header(subject_header)
+                                subject_parts = []
+                                for part, encoding in decoded_parts:
+                                    if isinstance(part, bytes):
+                                        subject_parts.append(part.decode(encoding or "utf-8", errors="ignore"))
+                                    else:
+                                        subject_parts.append(str(part))
+                                subject_str = "".join(subject_parts)
+                            except Exception:
+                                subject_str = str(subject_header)
+                                
+                        # Parse date header
+                        parsed_date = datetime.datetime.utcnow().isoformat()
+                        if date_header:
+                            try:
+                                t = email.utils.parsedate_to_datetime(date_header)
+                                parsed_date = t.isoformat()
+                            except Exception:
+                                pass
+                                
+                        if sender_email not in inbox_emails:
+                            inbox_emails[sender_email] = []
+                        
+                        inbox_emails[sender_email].append({
+                            "id": curr_mail_id,
+                            "subject": subject_str,
+                            "receivedAt": parsed_date
+                        })
         except Exception as e:
-            print(f"Error reading email header: {e}")
-            continue
+            print(f"Error reading batch email headers: {e}")
 
-    # 4. Cross-reference with our Leads DB
+    # Cross-reference with our Leads DB
     db = load_db(user_id)
     new_replies = []
     
+    # helper normalization functions
+    def normalize_subject(subj: str) -> str:
+        if not subj:
+            return ""
+        subj = subj.lower()
+        subj = re.sub(r'^(re|fwd|fw|reply|re-reply|aw|wg)\s*:\s*', '', subj)
+        subj = re.sub(r'[^a-z0-9]', '', subj)
+        return subj
+
+    def extract_original_subject(draft_email: str) -> str:
+        if not draft_email:
+            return ""
+        lines = draft_email.split("\n")
+        for line in lines:
+            if line.lower().startswith("subject:"):
+                return line[len("subject:"):].strip()
+        return ""
+
+    def clean_reply_body(body_text: str) -> str:
+        if not body_text:
+            return ""
+        body_text = re.split(r'-{3,}\s*Original Message\s*-{3,}', body_text, flags=re.IGNORECASE)[0]
+        body_text = re.split(r'^On\s+.*wrote:\s*$', body_text, flags=re.MULTILINE | re.IGNORECASE)[0]
+        body_text = re.split(r'^\s*From:\s+.*$', body_text, flags=re.MULTILINE | re.IGNORECASE)[0]
+        body_text = re.split(r'^_{3,}\s*$', body_text, flags=re.MULTILINE)[0]
+        return body_text.strip()
+
     for lead in db.values():
         lead_email = (lead.get("contactInfo") or "").lower().strip()
         if not lead_email:
@@ -2270,12 +2345,22 @@ async def sync_replies_endpoint(user_id: str = Depends(get_current_user_id)):
         if lead_email in inbox_emails:
             matching_messages = inbox_emails[lead_email]
             
+            # Check subject matches
+            original_subject = extract_original_subject(lead.get("draftEmail") or "")
+            norm_original = normalize_subject(original_subject)
+            
             if "receivedReplies" not in lead:
                 lead["receivedReplies"] = []
                 
             existing_dates = {r.get("receivedAt") for r in lead["receivedReplies"]}
             
             for msg_meta in matching_messages:
+                # Subject matching constraint: if there is an original subject, match it!
+                if norm_original:
+                    norm_received = normalize_subject(msg_meta["subject"])
+                    if norm_original not in norm_received and norm_received not in norm_original:
+                        continue
+                
                 if msg_meta["receivedAt"] in existing_dates:
                     continue
                     
@@ -2304,7 +2389,8 @@ async def sync_replies_endpoint(user_id: str = Depends(get_current_user_id)):
                 except Exception as body_err:
                     print(f"Failed to fetch body for email {msg_meta['id']}: {body_err}")
                 
-                cleaned_body = body_content.strip()
+                # Clean and strip reply quotes
+                cleaned_body = clean_reply_body(body_content)
                 if len(cleaned_body) > 1000:
                     cleaned_body = cleaned_body[:1000] + "... (truncated)"
                     
@@ -2322,11 +2408,16 @@ async def sync_replies_endpoint(user_id: str = Depends(get_current_user_id)):
                     "email": lead_email
                 })
                 
-    # 5. Save lead updates to database
+                # Trigger system notification / webhook
+                if webhook_url:
+                    try:
+                        asyncio.create_task(trigger_replied_webhook(webhook_url, lead))
+                    except Exception as we:
+                        print(f"Failed to trigger webhook task: {we}")
+                
     if new_replies:
         save_db(db, user_id)
 
-    # 6. Safely log out from IMAP
     try:
         mail.close()
         mail.logout()
@@ -2338,6 +2429,46 @@ async def sync_replies_endpoint(user_id: str = Depends(get_current_user_id)):
         "newRepliesCount": len(new_replies),
         "replies": new_replies
     }
+
+async def imap_background_worker_loop():
+    await asyncio.sleep(15)  # Wait for startup connections to settle
+    while True:
+        try:
+            print("[Background worker] Running periodic IMAP reply synchronization...")
+            coll = db_manager.get_collection("integrations")
+            if coll is not None:
+                all_configs = list(coll.find({}))
+            else:
+                all_configs = db_manager.json_db.find("integrations", {})
+                
+            for cfg in all_configs:
+                user_id = cfg.get("userId")
+                if not user_id:
+                    continue
+                await sync_replies_for_user(user_id, cfg)
+        except Exception as e:
+            print(f"[Background worker] Error in IMAP synchronization task: {e}")
+            
+        # Sleep for 10 minutes (600 seconds)
+        await asyncio.sleep(600)
+
+@router.on_event("startup")
+async def startup_event():
+    asyncio.create_task(imap_background_worker_loop())
+
+@router.post("/api/outreach/sync-replies")
+async def sync_replies_endpoint(user_id: str = Depends(get_current_user_id)):
+    # 1. Load user's integrations configuration
+    coll = db_manager.get_collection("integrations")
+    if coll is not None:
+        cfg = coll.find_one({"userId": user_id}) or {}
+    else:
+        cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
+        
+    res = await sync_replies_for_user(user_id, cfg)
+    if res.get("status") == "error":
+        raise HTTPException(status_code=500, detail=res.get("message"))
+    return res
 
 @router.get("/api/model-config")
 async def get_model_config_endpoint(user_id: str = Depends(get_current_user_id)):

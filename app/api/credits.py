@@ -15,6 +15,9 @@ async def get_credit_transactions(user_id: str = Depends(get_current_user_id)):
     coll_tx = db_manager.get_collection("credit_transactions")
     if coll_tx is not None:
         transactions = list(coll_tx.find({"userId": user_id}))
+        for tx in transactions:
+            if "_id" in tx:
+                tx["_id"] = str(tx["_id"])
     else:
         transactions = db_manager.json_db.find("credit_transactions", {"userId": user_id})
 
