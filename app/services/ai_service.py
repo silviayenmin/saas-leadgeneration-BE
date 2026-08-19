@@ -8,19 +8,19 @@ logger = logging.getLogger("mapflow_ai.ai_service")
 
 class GroqProvider:
     @staticmethod
-    async def generate(prompt: str, api_key: str) -> str:
+    async def generate(prompt: str, api_key: str, model: str = "llama-3.3-70b-versatile", temperature: float = 0.7) -> str:
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         }
         payload = {
-            "model": "groq/compound-mini",
+            "model": model,
             "messages": [
                 {"role": "system", "content": "You are MapFlow AI, an expert B2B lead generation & sales pitch assistant."},
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.7
+            "temperature": temperature
         }
         async with httpx.AsyncClient(timeout=30.0) as client:
             res = await client.post(url, headers=headers, json=payload)
@@ -32,12 +32,15 @@ class GroqProvider:
 
 class OllamaProvider:
     @staticmethod
-    async def generate(prompt: str, base_url: str = settings.OLLAMA_BASE_URL) -> str:
-        url = f"{base_url}/api/generate"
+    async def generate(prompt: str, base_url: str = settings.OLLAMA_BASE_URL, model: str = "llama3.1:8b", temperature: float = 0.7) -> str:
+        url = f"{base_url.rstrip('/')}/api/generate"
         payload = {
-            "model": "llama3.1:8b",
+            "model": model,
             "prompt": prompt,
-            "stream": False
+            "stream": False,
+            "options": {
+                "temperature": temperature
+            }
         }
         async with httpx.AsyncClient(timeout=30.0) as client:
             res = await client.post(url, json=payload)
@@ -101,7 +104,7 @@ Return ONLY valid JSON matching this schema:
             }
 
     @staticmethod
-    async def generate_cold_pitch(business_data: Dict[str, Any], pitch_type: str, provider: str = "groq", api_key: str = "") -> str:
+    async def generate_cold_pitch(business_data: Dict[str, Any], pitch_type: str, provider: str = "groq", api_key: str = "", model: str = None, temperature: float = 0.7, base_url: str = None) -> str:
         prompt = f"""
 Write a highly personalized, professional cold outreach email to the owner of {business_data.get('name')}.
 Pitch Type: {pitch_type}
@@ -117,9 +120,12 @@ Guidelines:
         effective_key = api_key or settings.GROQ_API_KEY
         try:
             if provider == "groq" and effective_key:
-                return await GroqProvider.generate(prompt, effective_key)
+                effective_model = model or "llama-3.3-70b-versatile"
+                return await GroqProvider.generate(prompt, effective_key, model=effective_model, temperature=temperature)
             else:
-                return await OllamaProvider.generate(prompt)
+                effective_model = model or "llama3.1:8b"
+                effective_url = base_url or settings.OLLAMA_BASE_URL
+                return await OllamaProvider.generate(prompt, base_url=effective_url, model=effective_model, temperature=temperature)
         except Exception as e:
             logger.warning(f"AI pitch generation failed ({e}). Returning template pitch.")
             return f"Hi {business_data.get('name')} Team,\n\nI noticed {business_data.get('name')} has an impressive {business_data.get('rating')}-star rating on Google Maps!\n\nWe specialize in {pitch_type} for top-tier local service providers. Would you be open to a 5-minute chat this week on how we can double your online leads?\n\nBest regards,\nMapFlow AI Team"
