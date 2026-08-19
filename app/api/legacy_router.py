@@ -437,6 +437,7 @@ def save_searches(searches: list, user_id: str):
             coll.replace_one(
                 {
                     "keyword": s_copy.get("keyword"),
+                    "location": s_copy.get("location"),
                     "platform": s_copy.get("platform"),
                     "search_type": s_copy.get("search_type", "sales"),
                     "userId": user_id
@@ -447,6 +448,7 @@ def save_searches(searches: list, user_id: str):
         else:
             existing = db_manager.json_db.find_one("searches", {
                 "keyword": s_copy.get("keyword"),
+                "location": s_copy.get("location"),
                 "platform": s_copy.get("platform"),
                 "search_type": s_copy.get("search_type", "sales"),
                 "userId": user_id
@@ -454,6 +456,7 @@ def save_searches(searches: list, user_id: str):
             if existing:
                 db_manager.json_db.update_one("searches", {
                     "keyword": s_copy.get("keyword"),
+                    "location": s_copy.get("location"),
                     "platform": s_copy.get("platform"),
                     "search_type": s_copy.get("search_type", "sales"),
                     "userId": user_id
@@ -1547,15 +1550,22 @@ async def sync_sheets_endpoint(
             detail="Failed to initialize Google Sheet workspace."
         )
 
-    # 5. Group the leads by search query keyword
+    # 5. Group the leads by search query keyword + location
     searches = load_searches(user_id)
     url_to_keyword = {}
     for s in searches:
         kw = s.get("keyword")
-        lead_urls = s.get("leadUrls") or []
+        loc = s.get("location")
         if kw:
+            if loc:
+                short_kw = kw[:15].strip()
+                short_loc = loc[:10].strip()
+                tab_name = f"{short_kw} - {short_loc}"
+            else:
+                tab_name = kw
+            lead_urls = s.get("leadUrls") or []
             for u in lead_urls:
-                url_to_keyword[u] = kw
+                url_to_keyword[u] = tab_name
 
     grouped_leads = {}
     for lead in payload.leads:
@@ -1620,10 +1630,14 @@ async def sync_sheets_endpoint(
             else:
                 score_str = f"{score}%"
 
+            phone = lead.get("phone") or "No phone"
+            if phone and str(phone).strip().startswith("+"):
+                phone = f"'{phone}"
+
             rows.append([
                 lead.get("companyName") or "Unknown Business",
                 lead.get("location") or "Not Specified",
-                lead.get("phone") or "No phone",
+                phone,
                 lead.get("contactInfo") or "No email revealed",
                 lead.get("rating") or "N/A",
                 lead.get("reviews") or 0,
