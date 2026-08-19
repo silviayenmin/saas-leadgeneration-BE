@@ -59,10 +59,16 @@ def calculate_lead_score(lead: dict, user_profile: dict = None) -> dict:
         lead["leadScore"] = profile_score
         if profile_score >= 70:
             lead["leadCategory"] = "High Intent"
+            lead["leadStatus"] = "Qualified"
         elif profile_score >= 50:
             lead["leadCategory"] = "Medium Intent"
+            lead["leadStatus"] = "Warm Lead"
         else:
             lead["leadCategory"] = "Low Intent"
+            lead["leadStatus"] = "Potential Lead"
+            
+        if lead.get("isConverted"):
+            lead["leadStatus"] = "Warm Lead"
         return lead
 
     search_type = lead.get("search_type", "sales")
@@ -121,6 +127,15 @@ def calculate_lead_score(lead: dict, user_profile: dict = None) -> dict:
                 
         lead["leadScore"] = total_score
         lead["leadCategory"] = category
+        if category == "High Intent":
+            lead["leadStatus"] = "Qualified"
+        elif category == "Medium Intent":
+            lead["leadStatus"] = "Warm Lead"
+        else:
+            lead["leadStatus"] = "Potential Lead"
+            
+        if lead.get("isConverted"):
+            lead["leadStatus"] = "Warm Lead"
         return lead
 
     # Standard Sales Scoring (search_type == "sales")
@@ -182,6 +197,15 @@ def calculate_lead_score(lead: dict, user_profile: dict = None) -> dict:
 
     lead["leadScore"] = total_score
     lead["leadCategory"] = category
+    if category == "High Intent":
+        lead["leadStatus"] = "Qualified"
+    elif category == "Medium Intent":
+        lead["leadStatus"] = "Warm Lead"
+    else:
+        lead["leadStatus"] = "Potential Lead"
+        
+    if lead.get("isConverted"):
+        lead["leadStatus"] = "Warm Lead"
     return lead
 
 def validate_author_name(author: str, platform: str = None) -> str:

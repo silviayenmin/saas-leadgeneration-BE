@@ -30,6 +30,32 @@ def get_chat_completion(messages, response_format=None, temperature=0.1) -> str:
         except Exception as e:
             print(f"[ContactEnrichment] Groq chat completion failed: {e}")
     
+    # Fallback to Gemini API
+    try:
+        gemini_key = settings.GEMINI_API_KEY
+        if gemini_key and gemini_key.strip():
+            print("[ContactEnrichment] Falling back to Gemini API...")
+            contents = []
+            for msg in messages:
+                role = "user" if msg["role"] == "user" else "model"
+                contents.append({
+                    "role": role,
+                    "parts": [{"text": msg["content"]}]
+                })
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
+            headers = {"Content-Type": "application/json"}
+            payload = {"contents": contents}
+            if response_format and response_format.get("type") == "json_object":
+                payload["generationConfig"] = {"responseMimeType": "application/json"}
+            with httpx.Client(timeout=25.0) as client:
+                res = client.post(url, headers=headers, json=payload)
+                if res.status_code == 200:
+                    return res.json()["candidates"][0]["content"]["parts"][0]["text"]
+                else:
+                    print(f"[ContactEnrichment] Gemini fallback returned status {res.status_code}: {res.text}")
+    except Exception as e:
+        print(f"[ContactEnrichment] Gemini fallback chat completion failed: {e}")
+
     # Fallback to Ollama
     try:
         url = f"{settings.OLLAMA_BASE_URL}/api/generate"
@@ -522,11 +548,31 @@ class ContactEnrichmentManager:
             
             cleaned_company = cleaned_company.strip()
             
-            # Remove corporate suffixes if it has multiple words
+            # Remove trailing local SEO keywords and generic descriptions
+            lower_name = cleaned_company.lower()
+            for kw in [
+                "website design", "web design", "webdevelopment", "web development", 
+                "software development", "app development", "digital marketing", 
+                "seo company", "seo agency", "seo services", "marketing agency",
+                "website development", "software solutions", "it solutions"
+            ]:
+                if kw in lower_name:
+                    idx = lower_name.find(kw)
+                    left_part = cleaned_company[:idx].strip()
+                    if left_part:
+                        cleaned_company = left_part
+                        lower_name = cleaned_company.lower()
+
+            # Remove corporate suffixes and generic descriptors if it has multiple words
             words = cleaned_company.split()
             if len(words) > 1:
                 cleaned_words = []
-                suffixes = {"private", "limited", "pvt", "ltd", "pvt.", "ltd.", "inc", "inc.", "llc", "llp", "corp", "corporation", "co", "company"}
+                suffixes = {
+                    "private", "limited", "pvt", "ltd", "pvt.", "ltd.", "inc", "inc.", "llc", "llp", 
+                    "corp", "corporation", "co", "company", "group", "group of", "of", "services", 
+                    "solutions", "technologies", "technology", "systems", "agency", "chennai", 
+                    "bangalore", "mumbai", "delhi", "india", "london", "new york", "usa", "uk"
+                }
                 for w in words:
                     if w.lower() not in suffixes:
                         cleaned_words.append(w)
