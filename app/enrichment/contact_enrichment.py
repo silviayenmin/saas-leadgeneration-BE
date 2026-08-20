@@ -42,7 +42,7 @@ def get_chat_completion(messages, response_format=None, temperature=0.1) -> str:
                     "role": role,
                     "parts": [{"text": msg["content"]}]
                 })
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
             headers = {"Content-Type": "application/json"}
             payload = {"contents": contents}
             if response_format and response_format.get("type") == "json_object":

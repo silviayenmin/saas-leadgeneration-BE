@@ -82,7 +82,7 @@ def classify_lead_intent(title: str, snippet: str, search_type: str = "sales", p
                     "parts": [{"text": prompt}]
                 }
             ]
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
             headers = {"Content-Type": "application/json"}
             payload = {
                 "contents": contents,
