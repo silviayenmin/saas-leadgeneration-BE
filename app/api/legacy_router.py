@@ -1426,7 +1426,7 @@ Subject: [Subject Line]
         if active_provider == "groq":
             api_key = settings.GROQ_API_KEY
             if not api_model:
-                api_model = "llama-3.3-70b-versatile"
+                api_model = "groq/compound-mini"
                 
             if api_key and api_key.strip():
                 url = "https://api.groq.com/openai/v1/chat/completions"
