@@ -20,7 +20,8 @@ class CreditService:
                 "plan": "FREE",
                 "creditLimit": settings.FREE_CREDITS,
                 "creditsUsed": 0,
-                "resetDate": datetime.utcnow().strftime("%Y-%m-%d")
+                "resetDate": datetime.utcnow().strftime("%Y-%m-%d"),
+                "updatedAt": datetime.utcnow().isoformat()
             }
             if coll is not None:
                 coll.insert_one(sub)

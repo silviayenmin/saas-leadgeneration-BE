@@ -54,3 +54,39 @@ def get_current_user_id(token: str = Depends(oauth2_scheme)) -> str:
     if user_id is None:
         raise credentials_exception
     return user_id
+
+def get_current_admin_user(token: str = Depends(oauth2_scheme)) -> dict:
+    from app.core.database import db_manager
+    
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    payload = decode_access_token(token)
+    if payload is None:
+        raise credentials_exception
+    user_id: str = payload.get("sub")
+    if user_id is None:
+        raise credentials_exception
+        
+    coll = db_manager.get_collection("users")
+    if coll is not None:
+        user = coll.find_one({"id": user_id})
+    else:
+        user = db_manager.json_db.find_one("users", {"id": user_id})
+        
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+        
+    if user.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required"
+        )
+        
+    return user
+

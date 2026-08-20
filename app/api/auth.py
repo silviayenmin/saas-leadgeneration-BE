@@ -32,6 +32,8 @@ def signup(user_data: UserSignUp):
         "passwordHash": get_password_hash(user_data.password),
         "isVerified": False,
         "otpCode": otp_code,
+        "role": "user",
+        "createdAt": datetime.utcnow().isoformat(),
         "onboardingCompleted": False
     }
 
@@ -85,6 +87,7 @@ def verify_otp(otp_data: OTPVerify):
             "fullName": user["fullName"],
             "email": user["email"],
             "isVerified": True,
+            "role": user.get("role", "user"),
             "onboardingCompleted": user.get("onboardingCompleted", False)
         }
     }
@@ -151,6 +154,7 @@ def login(login_data: UserLogin):
             "fullName": user["fullName"],
             "email": user["email"],
             "isVerified": True,
+            "role": user.get("role", "user"),
             "onboardingCompleted": user.get("onboardingCompleted", False)
         }
     }
