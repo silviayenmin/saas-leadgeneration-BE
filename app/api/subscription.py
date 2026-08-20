@@ -26,12 +26,14 @@ async def upgrade_plan(plan_key: str, user_id: str = Depends(get_current_user_id
     if plan_key not in PLANS:
         raise HTTPException(status_code=400, detail="Invalid plan selected")
 
+    from datetime import datetime
     plan_info = PLANS[plan_key]
     coll_sub = db_manager.get_collection("subscriptions")
     update_data = {
         "plan": plan_key,
         "creditLimit": plan_info["credits"],
-        "creditsUsed": 0
+        "creditsUsed": 0,
+        "updatedAt": datetime.utcnow().isoformat()
     }
 
     if coll_sub is not None:
