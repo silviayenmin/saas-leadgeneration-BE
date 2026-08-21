@@ -211,3 +211,72 @@ class EmailService:
         )
         thread.start()
 
+    @staticmethod
+    def send_generated_password_email(to_email: str, name: str, password: str) -> bool:
+        """
+        Sends an HTML email with the newly generated password to the user.
+        """
+        smtp_user = settings.SMTP_USERNAME.strip()
+        smtp_pass = settings.SMTP_PASSWORD.strip().replace(" ", "")
+
+        if not smtp_user or not smtp_pass or "your-actual-email" in smtp_user or "your-email" in smtp_user:
+            logger.info(f"[SIMULATED EMAIL] Generated Password for '{to_email}' name: {name}, password: {password}")
+            return True
+
+        try:
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = "MapFlow AI — Your Account Password Has Been Updated"
+            msg["From"] = f"MapFlow AI <{smtp_user}>"
+            msg["To"] = to_email
+
+            html_content = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+              <style>
+                body {{ font-family: 'Inter', Arial, sans-serif; background-color: #0A0F1C; color: #F8FAFC; padding: 20px; }}
+                .card {{ max-width: 480px; margin: 0 auto; background: #182233; border: 1px solid rgba(148,163,184,0.15); border-radius: 12px; padding: 32px; text-align: left; }}
+                .credentials {{ font-family: monospace; background: #111827; padding: 16px; border-radius: 8px; color: #0EA5A4; margin: 20px 0; font-size: 14px; line-height: 1.6; }}
+                .footer {{ font-size: 12px; color: #94A3B8; margin-top: 24px; text-align: center; }}
+              </style>
+            </head>
+            <body>
+              <div class="card">
+                <h2 style="color: #0EA5A4; text-align: center; margin-bottom: 24px;">MAPFLOW AI</h2>
+                <h3 style="color: #F8FAFC;">Hello, {name}!</h3>
+                <p style="color: #94A3B8;">An administrator has reset your password. Below is your newly generated temporary password. Please log in and change it in your Profile Settings.</p>
+                
+                <div class="credentials">
+                  <strong>Email:</strong> {to_email}<br/>
+                  <strong>New Generated Password:</strong> {password}
+                </div>
+                
+                <div class="footer">© 2026 MapFlow AI. All rights reserved.</div>
+              </div>
+            </body>
+            </html>
+            """
+
+            msg.attach(MIMEText(html_content, "html"))
+
+            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=5) as server:
+                server.starttls()
+                server.login(smtp_user, smtp_pass)
+                server.sendmail(smtp_user, to_email, msg.as_string())
+
+            logger.info(f"Successfully delivered generated password email to {to_email}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to send generated password email to {to_email}: {e}")
+            return False
+
+    @staticmethod
+    def send_async_generated_password_email(to_email: str, name: str, password: str):
+        """Spawns an un-blocked daemon thread to deliver the email."""
+        thread = threading.Thread(
+            target=EmailService.send_generated_password_email,
+            args=(to_email, name, password),
+            daemon=True
+        )
+        thread.start()
+

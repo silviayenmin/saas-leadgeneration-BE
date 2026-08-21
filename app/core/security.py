@@ -53,6 +53,21 @@ def get_current_user_id(token: str = Depends(oauth2_scheme)) -> str:
     user_id: str = payload.get("sub")
     if user_id is None:
         raise credentials_exception
+        
+    # Check user suspension status
+    from app.core.database import db_manager
+    coll = db_manager.get_collection("users")
+    if coll is not None:
+        user = coll.find_one({"id": user_id}, {"status": 1})
+    else:
+        user = db_manager.json_db.find_one("users", {"id": user_id})
+        
+    if user and user.get("status") == "SUSPENDED":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account has been suspended by the administrator. Please contact support."
+        )
+        
     return user_id
 
 def get_current_admin_user(token: str = Depends(oauth2_scheme)) -> dict:
@@ -82,7 +97,7 @@ def get_current_admin_user(token: str = Depends(oauth2_scheme)) -> dict:
             detail="User not found"
         )
         
-    if user.get("role") != "admin":
+    if user.get("role") not in ["admin", "super_admin", "superadmin", "super admin"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin privileges required"

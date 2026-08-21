@@ -1,6 +1,6 @@
 import uuid
 import random
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Request
 from app.schemas.schemas import UserSignUp, UserLogin, OTPVerify, ResendOTPRequest, ForgotPasswordRequest, ResetPasswordRequest
 from app.core.security import get_password_hash, verify_password, create_access_token, get_current_user_id
 from app.core.database import db_manager
@@ -118,7 +118,7 @@ def resend_otp(req: ResendOTPRequest):
     }
 
 @router.post("/login")
-def login(login_data: UserLogin):
+def login(login_data: UserLogin, request: Request):
     coll = db_manager.get_collection("users")
     if coll is not None:
         user = coll.find_one({"email": login_data.email})
@@ -127,6 +127,12 @@ def login(login_data: UserLogin):
 
     if not user or not verify_password(login_data.password, user.get("passwordHash", "")):
         raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    if user.get("status") == "SUSPENDED":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account has been suspended by the administrator. Please contact support."
+        )
 
     if not user.get("isVerified", False):
         # Generate fresh OTP if not verified yet
@@ -146,6 +152,11 @@ def login(login_data: UserLogin):
         }
 
     token = create_access_token({"sub": user["id"], "email": user["email"]})
+    
+    # Log successful login activity
+    from app.services.activity_service import ActivityService
+    ActivityService.log(user["id"], "Logged In", request)
+
     return {
         "success": True,
         "token": token,
