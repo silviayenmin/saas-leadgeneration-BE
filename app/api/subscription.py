@@ -14,7 +14,32 @@ PLANS = {
 
 @router.get("/plans")
 async def get_plans():
-    return {"success": True, "data": PLANS}
+    coll = db_manager.get_collection("pricing_plans")
+    if coll is not None:
+        plans_list = list(coll.find({}))
+    else:
+        plans_list = db_manager.json_db.find("pricing_plans")
+
+    plans_dict = {}
+    for p in plans_list:
+        key = p["id"].upper()
+        # Parse price numeric safely
+        raw_amt = p["amount"] or "$0"
+        price_num = 0
+        try:
+            price_num = int(raw_amt.replace("$", "").split("/")[0].strip())
+        except Exception:
+            pass
+
+        plans_dict[key] = {
+            "price": price_num,
+            "credits": p["creditLimit"],
+            "name": p["planName"],
+            "features": p.get("features", []),
+            "badge": p.get("badge", ""),
+            "isPopular": p.get("isPopular", False)
+        }
+    return {"success": True, "data": plans_dict}
 
 @router.get("/current")
 async def get_current_subscription(user_id: str = Depends(get_current_user_id)):
