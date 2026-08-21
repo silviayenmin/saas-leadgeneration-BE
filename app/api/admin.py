@@ -606,6 +606,11 @@ def delete_pricing_plan(plan_id: str, admin_user: dict = Depends(get_current_adm
 
 @router.post("/create-admin")
 def create_admin(req: CreateAdminRequest, admin_user: dict = Depends(get_current_admin_user)):
+    if admin_user.get("role") not in ["super_admin", "superadmin", "super admin"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only super administrators are authorized to create new admin accounts."
+        )
     coll_users = db_manager.get_collection("users")
     email_lower = req.email.strip().lower()
     
@@ -678,5 +683,97 @@ def change_user_password(
         raise HTTPException(status_code=404, detail="User not found")
         
     return {"success": True, "message": "User password updated successfully."}
+
+class UpdateStatusRequest(BaseModel):
+    status: str
+
+@router.put("/users/{user_id}/status")
+def update_user_status(
+    user_id: str,
+    req: UpdateStatusRequest,
+    admin_user: dict = Depends(get_current_admin_user)
+):
+    if req.status not in ["ACTIVE", "SUSPENDED"]:
+        raise HTTPException(status_code=400, detail="Invalid status value. Must be ACTIVE or SUSPENDED.")
+        
+    coll_users = db_manager.get_collection("users")
+    if coll_users is not None:
+        result = coll_users.update_one({"id": user_id}, {"$set": {"status": req.status}})
+        success = result.matched_count > 0
+    else:
+        success = db_manager.json_db.update_one("users", {"id": user_id}, {"$set": {"status": req.status}})
+        
+    if not success:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    return {"success": True, "message": f"User status updated to {req.status} successfully."}
+
+@router.get("/activities")
+def get_all_activities(admin_user: dict = Depends(get_current_admin_user)):
+    coll_logs = db_manager.get_collection("activity_logs")
+    if coll_logs is not None:
+        logs = list(coll_logs.find({}))
+    else:
+        logs = db_manager.json_db.find("activity_logs")
+    
+    # Clean Mongo IDs if present
+    for log in logs:
+        if "_id" in log:
+            log["_id"] = str(log["_id"])
+            
+    return {"success": True, "data": logs}
+
+@router.post("/users/{user_id}/generate-password")
+def generate_user_password(
+    user_id: str,
+    admin_user: dict = Depends(get_current_admin_user)
+):
+    import string
+    import secrets
+    
+    coll_users = db_manager.get_collection("users")
+    if coll_users is not None:
+        user = coll_users.find_one({"id": user_id})
+    else:
+        user = db_manager.json_db.find_one("users", {"id": user_id})
+        
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    # Restrict generating passwords for admin accounts to super admins only
+    if user.get("role") in ["admin", "super_admin", "superadmin", "super admin"]:
+        if admin_user.get("role") not in ["super_admin", "superadmin", "super admin"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only super administrators can generate passwords for admin accounts."
+            )
+        
+    # Generate secure 12-char password
+    alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+    generated_password = "".join(secrets.choice(alphabet) for _ in range(12))
+    
+    hashed_password = get_password_hash(generated_password)
+    
+    if coll_users is not None:
+        result = coll_users.update_one({"id": user_id}, {"$set": {"passwordHash": hashed_password}})
+        success = result.matched_count > 0
+    else:
+        success = db_manager.json_db.update_one("users", {"id": user_id}, {"$set": {"passwordHash": hashed_password}})
+        
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to update password in database")
+        
+    from app.services.email_service import EmailService
+    EmailService.send_async_generated_password_email(
+        to_email=user.get("email"),
+        name=user.get("fullName") or "User",
+        password=generated_password
+    )
+    
+    return {
+        "success": True,
+        "message": f"Successfully generated a new password for '{user.get('email')}'. The password has been emailed to the user.",
+        "generatedPassword": generated_password
+    }
 
 
