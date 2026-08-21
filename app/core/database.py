@@ -29,7 +29,8 @@ class JSONFallbackDB:
                     "outreach_activities": [],
                     "ai_usage": [],
                     "integrations": [],
-                    "webhooks": []
+                    "webhooks": [],
+                    "pricing_plans": []
                 }, f, indent=2)
         if not os.path.exists(self.login_file):
             with open(self.login_file, "w") as f:

@@ -1,10 +1,24 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
-from app.core.security import get_current_admin_user
+from app.core.security import get_current_admin_user, get_password_hash
 from app.core.database import db_manager
+from app.services.email_service import EmailService
+import uuid
+import random
+import string
+from datetime import datetime
 
 router = APIRouter()
+
+# Schema for creating a new admin
+class CreateAdminRequest(BaseModel):
+    fullName: str
+    email: str
+    role: str
+
+class UpdatePasswordRequest(BaseModel):
+    password: str
 
 # Schema for updating user role
 class UpdateRoleRequest(BaseModel):
@@ -14,6 +28,112 @@ class UpdateRoleRequest(BaseModel):
 class AdjustCreditsRequest(BaseModel):
     creditLimit: int
     creditsUsed: int
+
+# Schema for updating user payment method
+class UpdatePaymentRequest(BaseModel):
+    hasCardAttached: bool
+    cardBrand: Optional[str] = None
+    cardLast4: Optional[str] = None
+    cardExpiry: Optional[str] = None
+
+# Schema for updating subscription plan
+class UpdateSubscriptionRequest(BaseModel):
+    plan: str  # 'FREE', 'STARTER', or 'AGENCY_PRO'
+    creditLimit: int
+    resetDate: Optional[str] = None
+
+# Schema for global pricing plans CRUD
+class PricingPlanRequest(BaseModel):
+    id: str
+    planName: str
+    amount: str
+    creditLimit: int
+    features: List[str]
+    isPopular: Optional[bool] = False
+    badge: Optional[str] = ""
+
+def init_pricing_plans():
+    coll = db_manager.get_collection("pricing_plans")
+    if coll is not None:
+        try:
+            count = coll.count_documents({})
+            if count == 0:
+                defaults = [
+                    {
+                        "id": "free",
+                        "planName": "Free",
+                        "amount": "$0",
+                        "creditLimit": 25,
+                        "features": ["Google Maps Lead Search", "Free scans (25 credits)", "Basic Email Export"],
+                        "isPopular": False,
+                        "badge": ""
+                    },
+                    {
+                        "id": "starter",
+                        "planName": "Pro",
+                        "amount": "$29 / mo",
+                        "creditLimit": 500,
+                        "features": ["All Free features", "Unlimited searches", "Advanced Leads Filtering", "CSV/XLS Export", "API Access"],
+                        "isPopular": True,
+                        "badge": "Popular"
+                    },
+                    {
+                        "id": "agency_pro",
+                        "planName": "Enterprise",
+                        "amount": "$149 / mo",
+                        "creditLimit": 2500,
+                        "features": ["All Pro features", "2500 credits/mo", "White-label reports", "Priority Support", "Dedicated Manager"],
+                        "isPopular": False,
+                        "badge": "Best Value"
+                    }
+                ]
+                coll.insert_many(defaults)
+        except Exception as e:
+            print(f"Error checking MongoDB pricing_plans count: {e}")
+    else:
+        # Fallback JSON DB
+        try:
+            plans = db_manager.json_db.find("pricing_plans")
+            if not plans:
+                defaults = [
+                    {
+                        "id": "free",
+                        "planName": "Free",
+                        "amount": "$0",
+                        "creditLimit": 25,
+                        "features": ["Google Maps Lead Search", "Free scans (25 credits)", "Basic Email Export"],
+                        "isPopular": False,
+                        "badge": ""
+                    },
+                    {
+                        "id": "starter",
+                        "planName": "Pro",
+                        "amount": "$29 / mo",
+                        "creditLimit": 500,
+                        "features": ["All Free features", "Unlimited searches", "Advanced Leads Filtering", "CSV/XLS Export", "API Access"],
+                        "isPopular": True,
+                        "badge": "Popular"
+                    },
+                    {
+                        "id": "agency_pro",
+                        "planName": "Enterprise",
+                        "amount": "$149 / mo",
+                        "creditLimit": 2500,
+                        "features": ["All Pro features", "2500 credits/mo", "White-label reports", "Priority Support", "Dedicated Manager"],
+                        "isPopular": False,
+                        "badge": "Best Value"
+                    }
+                ]
+                for d in defaults:
+                    db_manager.json_db.insert_one("pricing_plans", d)
+        except Exception as e:
+            print(f"Error checking fallback JSON pricing_plans count: {e}")
+
+# Run initialization immediately on import
+try:
+    init_pricing_plans()
+except Exception as e:
+    print(f"Error executing pricing plans initialization: {e}")
 
 @router.get("/stats")
 def get_system_stats(admin_user: dict = Depends(get_current_admin_user)):
@@ -158,6 +278,7 @@ def get_users_list(admin_user: dict = Depends(get_current_admin_user)):
             "id": u_id,
             "fullName": user.get("fullName"),
             "email": user.get("email"),
+            "phone": user.get("phone"),
             "isVerified": user.get("isVerified", False),
             "role": user.get("role", "user"),
             "onboardingCompleted": user.get("onboardingCompleted", False),
@@ -167,6 +288,10 @@ def get_users_list(admin_user: dict = Depends(get_current_admin_user)):
             "creditLimit": user_sub.get("creditLimit", 25),
             "creditsUsed": user_sub.get("creditsUsed", 0),
             "resetDate": user_sub.get("resetDate") or "N/A",
+            "hasCardAttached": user.get("hasCardAttached", False),
+            "cardBrand": user.get("cardBrand"),
+            "cardLast4": user.get("cardLast4"),
+            "cardExpiry": user.get("cardExpiry"),
         }
         formatted_users.append(user_data)
 
@@ -307,3 +432,251 @@ def get_all_scans(admin_user: dict = Depends(get_current_admin_user)):
         formatted_scans.append(scan_data)
 
     return {"success": True, "data": formatted_scans}
+
+@router.put("/users/{user_id}/subscription")
+def update_user_subscription(
+    user_id: str,
+    req: UpdateSubscriptionRequest,
+    admin_user: dict = Depends(get_current_admin_user)
+):
+    coll_subs = db_manager.get_collection("subscriptions")
+    update_data = {
+        "plan": req.plan,
+        "creditLimit": req.creditLimit,
+        "resetDate": req.resetDate or ""
+    }
+
+    if coll_subs is not None:
+        sub = coll_subs.find_one({"userId": user_id})
+        if not sub:
+            # Insert subscription
+            coll_subs.insert_one({
+                "userId": user_id,
+                **update_data,
+                "creditsUsed": 0
+            })
+            success = True
+        else:
+            # Update subscription
+            result = coll_subs.update_one(
+                {"userId": user_id},
+                {"$set": update_data}
+            )
+            success = result.matched_count > 0
+    else:
+        sub = db_manager.json_db.find_one("subscriptions", {"userId": user_id})
+        if not sub:
+            db_manager.json_db.insert_one("subscriptions", {
+                "userId": user_id,
+                **update_data,
+                "creditsUsed": 0
+            })
+            success = True
+        else:
+            success = db_manager.json_db.update_one(
+                "subscriptions",
+                {"userId": user_id},
+                {"$set": update_data}
+            )
+
+    if not success:
+        raise HTTPException(status_code=404, detail="Subscription record not found")
+
+    return {"success": True, "message": f"User subscription plan updated to {req.plan}."}
+
+@router.put("/users/{user_id}/payment-method")
+def update_user_payment_method(
+    user_id: str,
+    req: UpdatePaymentRequest,
+    admin_user: dict = Depends(get_current_admin_user)
+):
+    coll_users = db_manager.get_collection("users")
+    update_data = {
+        "hasCardAttached": req.hasCardAttached,
+        "cardBrand": req.cardBrand,
+        "cardLast4": req.cardLast4,
+        "cardExpiry": req.cardExpiry
+    }
+
+    if coll_users is not None:
+        result = coll_users.update_one({"id": user_id}, {"$set": update_data})
+        success = result.matched_count > 0
+    else:
+        success = db_manager.json_db.update_one("users", {"id": user_id}, {"$set": update_data})
+
+    if not success:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return {"success": True, "message": "User payment profile updated."}
+
+@router.get("/plans")
+def get_pricing_plans(admin_user: dict = Depends(get_current_admin_user)):
+    coll = db_manager.get_collection("pricing_plans")
+    if coll is not None:
+        plans = list(coll.find({}))
+        # Stringify MongoDB _id
+        for p in plans:
+            if "_id" in p:
+                p["_id"] = str(p["_id"])
+    else:
+        plans = db_manager.json_db.find("pricing_plans")
+    return {"success": True, "data": plans}
+
+@router.post("/plans")
+def create_pricing_plan(req: PricingPlanRequest, admin_user: dict = Depends(get_current_admin_user)):
+    coll = db_manager.get_collection("pricing_plans")
+    plan_data = {
+        "id": req.id.strip().lower(),
+        "planName": req.planName,
+        "amount": req.amount,
+        "creditLimit": req.creditLimit,
+        "features": req.features,
+        "isPopular": bool(req.isPopular),
+        "badge": req.badge or ""
+    }
+
+    if coll is not None:
+        exists = coll.find_one({"id": plan_data["id"]})
+        if exists:
+            raise HTTPException(status_code=400, detail="Plan ID already exists.")
+        
+        # If setting this plan as popular, clear it from all others first
+        if plan_data["isPopular"]:
+            coll.update_many({}, {"$set": {"isPopular": False}})
+            
+        coll.insert_one(plan_data)
+        if "_id" in plan_data:
+            plan_data["_id"] = str(plan_data["_id"])
+    else:
+        exists = db_manager.json_db.find_one("pricing_plans", {"id": plan_data["id"]})
+        if exists:
+            raise HTTPException(status_code=400, detail="Plan ID already exists.")
+        
+        if plan_data["isPopular"]:
+            all_plans = db_manager.json_db.find("pricing_plans")
+            for p in all_plans:
+                db_manager.json_db.update_one("pricing_plans", {"id": p["id"]}, {"$set": {"isPopular": False}})
+                
+        db_manager.json_db.insert_one("pricing_plans", plan_data)
+
+    return {"success": True, "message": f"Pricing plan '{req.planName}' created successfully.", "data": plan_data}
+
+@router.put("/plans/{plan_id}")
+def update_pricing_plan(plan_id: str, req: PricingPlanRequest, admin_user: dict = Depends(get_current_admin_user)):
+    coll = db_manager.get_collection("pricing_plans")
+    update_data = {
+        "planName": req.planName,
+        "amount": req.amount,
+        "creditLimit": req.creditLimit,
+        "features": req.features,
+        "isPopular": bool(req.isPopular),
+        "badge": req.badge or ""
+    }
+
+    if coll is not None:
+        if update_data["isPopular"]:
+            coll.update_many({}, {"$set": {"isPopular": False}})
+        result = coll.update_one({"id": plan_id}, {"$set": update_data})
+        success = result.matched_count > 0
+    else:
+        if update_data["isPopular"]:
+            all_plans = db_manager.json_db.find("pricing_plans")
+            for p in all_plans:
+                db_manager.json_db.update_one("pricing_plans", {"id": p["id"]}, {"$set": {"isPopular": False}})
+        success = db_manager.json_db.update_one("pricing_plans", {"id": plan_id}, {"$set": update_data})
+
+    if not success:
+        raise HTTPException(status_code=404, detail="Pricing plan not found.")
+
+    return {"success": True, "message": f"Pricing plan '{req.planName}' updated successfully."}
+
+@router.delete("/plans/{plan_id}")
+def delete_pricing_plan(plan_id: str, admin_user: dict = Depends(get_current_admin_user)):
+    coll = db_manager.get_collection("pricing_plans")
+    if coll is not None:
+        result = coll.delete_one({"id": plan_id})
+        success = result.deleted_count > 0
+    else:
+        success = db_manager.json_db.delete_one("pricing_plans", {"id": plan_id})
+
+    if not success:
+        raise HTTPException(status_code=404, detail="Pricing plan not found.")
+
+    return {"success": True, "message": f"Pricing plan '{plan_id}' deleted successfully."}
+
+@router.post("/create-admin")
+def create_admin(req: CreateAdminRequest, admin_user: dict = Depends(get_current_admin_user)):
+    coll_users = db_manager.get_collection("users")
+    email_lower = req.email.strip().lower()
+    
+    # Check if exists
+    if coll_users is not None:
+        exists = coll_users.find_one({"email": email_lower})
+    else:
+        exists = db_manager.json_db.find_one("users", {"email": email_lower})
+        
+    if exists:
+        raise HTTPException(status_code=400, detail="User with this email already exists.")
+        
+    # Generate secure random temporary password
+    chars = string.ascii_letters + string.digits
+    password = "".join(random.choice(chars) for _ in range(12))
+    
+    new_admin = {
+        "id": str(uuid.uuid4()),
+        "fullName": req.fullName.strip(),
+        "email": email_lower,
+        "passwordHash": get_password_hash(password),
+        "isVerified": True,
+        "otpCode": None,
+        "role": req.role.strip().lower(), # "admin"
+        "createdAt": datetime.utcnow().isoformat(),
+        "onboardingCompleted": True
+    }
+    
+    # Save to DB
+    if coll_users is not None:
+        coll_users.insert_one(new_admin)
+    else:
+        db_manager.json_db.insert_one("users", new_admin)
+        
+    # Send credentials email asynchronously
+    EmailService.send_async_admin_credentials_email(
+        to_email=email_lower,
+        name=new_admin["fullName"],
+        role=req.role.strip(),
+        password=password
+    )
+    
+    return {
+        "success": True,
+        "message": f"Admin account '{new_admin['fullName']}' created successfully.",
+        "user": {
+            "id": new_admin["id"],
+            "fullName": new_admin["fullName"],
+            "email": new_admin["email"],
+            "role": new_admin["role"]
+        }
+    }
+
+@router.put("/users/{user_id}/password")
+def change_user_password(
+    user_id: str,
+    req: UpdatePasswordRequest,
+    admin_user: dict = Depends(get_current_admin_user)
+):
+    coll_users = db_manager.get_collection("users")
+    hashed_password = get_password_hash(req.password)
+    
+    if coll_users is not None:
+        result = coll_users.update_one({"id": user_id}, {"$set": {"passwordHash": hashed_password}})
+        success = result.matched_count > 0
+    else:
+        success = db_manager.json_db.update_one("users", {"id": user_id}, {"$set": {"passwordHash": hashed_password}})
+        
+    if not success:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    return {"success": True, "message": "User password updated successfully."}
+
+
