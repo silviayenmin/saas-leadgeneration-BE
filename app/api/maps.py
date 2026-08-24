@@ -1,4 +1,5 @@
 import uuid
+import httpx
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from app.schemas.schemas import MapsSearchRequest
@@ -111,3 +112,25 @@ async def get_scans(user_id: str = Depends(get_current_user_id)):
     else:
         scans = db_manager.json_db.find("map_scans", {"userId": user_id})
     return {"success": True, "data": scans}
+
+@router.get("/geocode")
+async def geocode(q: str):
+    if not q.strip():
+        return {"success": True, "data": []}
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            r = await client.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"format": "json", "q": q.strip(), "limit": 1},
+                headers={"User-Agent": "MapFlowAgent/1.0"},
+                timeout=5.0
+            )
+            if r.status_code == 200:
+                return {"success": True, "data": r.json()}
+            else:
+                print(f"[Geocode Backend Proxy] Nominatim returned status {r.status_code}: {r.text}")
+                return {"success": False, "error": f"Nominatim status {r.status_code}"}
+        except Exception as e:
+            print(f"[Geocode Backend Proxy] Request failed: {e}")
+            return {"success": False, "error": str(e)}
