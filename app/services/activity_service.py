@@ -72,19 +72,23 @@ class ActivityService:
             
         user_name = "System"
         user_email = "system@mapflow.ai"
+        user_role = "user"
         
         if user:
             user_name = user.get("fullName") or user.get("name") or "User"
             user_email = user.get("email") or "user@mapflow.ai"
+            user_role = user.get("role") or "user"
         elif user_id == "admin":
             user_name = "Super Admin"
             user_email = "admin@mapflow.ai"
+            user_role = "admin"
             
         log_entry = {
             "id": str(uuid.uuid4()),
             "userId": user_id,
             "userName": user_name,
             "userEmail": user_email,
+            "role": user_role,
             "action": action,
             "ipAddress": ip,
             "device": device,

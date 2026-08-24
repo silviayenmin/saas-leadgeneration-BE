@@ -829,7 +829,7 @@ async def run_search(payload: SearchRequest, background_tasks: BackgroundTasks, 
         raise HTTPException(status_code=400, detail="Keyword is required")
     
     # Pre-check credits balance
-    credits_cost = settings.COST_MAP_SEARCH if (payload.platform or "linkedin").lower().strip() == "google_maps" else 1
+    credits_cost = payload.limit if payload.limit is not None else 10
     credits_info = CreditService.get_user_credits(user_id)
     if credits_info.get("creditsRemaining", 0) < credits_cost:
         raise HTTPException(status_code=400, detail=f"Insufficient credits. Requires {credits_cost} credit(s). Please upgrade your plan.")
