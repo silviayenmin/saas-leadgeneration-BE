@@ -28,9 +28,9 @@ class GoogleMapsAdapter:
             query_parts.append(f"in {location.strip()}")
         query = " ".join(query_parts)
 
-        print(f"[GoogleMapsAdapter] Running Playwright Maps scraper for query: {query}")
+        print(f"[GoogleMapsAdapter] Running Serper Maps scraper for query: {query}")
         
-        raw_leads = self.scrape_playwright(keyword, location, max_results=limit, exclude_urls=exclude_urls, exclude_names=exclude_names)
+        raw_leads = self.scrape_serper(query, location=location, limit=limit, api_key=api_key, exclude_urls=exclude_urls, exclude_names=exclude_names)
         
         results = []
         for lead in raw_leads:
@@ -65,6 +65,18 @@ class GoogleMapsAdapter:
                         print("      -> No emails found on website.")
                 except Exception as crawl_err:
                     print(f"[GoogleMapsAdapter] Web crawler error for {lead['website']}: {crawl_err}")
+            
+            if not linkedin:
+                # Fallback to search Serper Organic for the company's LinkedIn profile!
+                print(f"[GoogleMapsAdapter] LinkedIn not found on website. Querying Serper fallback for '{lead.get('name')}'...")
+                try:
+                    fallback_linkedin = self.search_linkedin_fallback(lead.get("name"), location, api_key=api_key)
+                    if fallback_linkedin:
+                        linkedin = fallback_linkedin
+                        print(f"      -> Found LinkedIn via Serper search fallback: {linkedin}")
+                except Exception as fb_err:
+                    print(f"[GoogleMapsAdapter] LinkedIn search fallback error: {fb_err}")
+
             contact_info = emails[0] if emails else None
             
             title = f"{lead['name']} - {lead['category'] or 'Business'} in {location or 'Target Area'}"
@@ -213,6 +225,146 @@ class GoogleMapsAdapter:
         result["founded_year"] = founded_year
         
         return result
+
+    def scrape_serper(self, query: str, location: str = None, limit: int = 10, api_key: str = None, exclude_urls: set = None, exclude_names: set = None) -> list:
+        import urllib.parse
+        serper_key = api_key if (api_key and api_key.strip()) else os.getenv("SERPER_API_KEY") or ""
+        print(f"[GoogleMapsAdapter] Running Serper Places API query: {query!r} | Key: {serper_key[:5]}...{serper_key[-5:] if len(serper_key) > 5 else ''}")
+
+        exclude_urls_clean = {u.strip() for u in (exclude_urls or set())}
+        exclude_names_clean = {n.lower().strip() for n in (exclude_names or set())}
+
+        raw_leads = []
+        page = 1
+        max_pages = 5  # Fetch up to 50 results across 5 pages if duplicates are skipped
+        
+        while len(raw_leads) < limit and page <= max_pages:
+            payload = {
+                "q": query,
+                "page": page
+            }
+            if location and location.strip():
+                payload["location"] = location.strip()
+
+            try:
+                response = requests.post(
+                    "https://google.serper.dev/places",
+                    headers={
+                        "X-API-KEY": serper_key,
+                        "Content-Type": "application/json"
+                    },
+                    json=payload,
+                    timeout=15
+                )
+                if response.status_code == 200:
+                    places = response.json().get("places", [])
+                    print(f"[GoogleMapsAdapter] Serper page {page} returned {len(places)} places.")
+                    if not places:
+                        print(f"[GoogleMapsAdapter] Reached the end of Serper places on page {page}.")
+                        break
+                    
+                    for place in places:
+                        name = place.get("title", "").strip()
+                        address = place.get("address", "").strip()
+                        phone = place.get("phoneNumber", "").strip()
+                        website = place.get("website", "").strip()
+                        
+                        rating = str(place.get("rating", ""))
+                        reviews = str(place.get("ratingCount", ""))
+                        
+                        category = place.get("category", "")
+                        if isinstance(category, list) and category:
+                            category = category[0]
+                        category = str(category).strip()
+                        
+                        cid = place.get("cid")
+                        if cid:
+                            maps_url = f"https://www.google.com/maps/?cid={cid}"
+                        else:
+                            place_id = place.get("placeId")
+                            if place_id:
+                                maps_url = f"https://www.google.com/maps/place/?q=place_id:{place_id}"
+                            else:
+                                maps_url = f"https://www.google.com/maps/search/{urllib.parse.quote_plus(name + ' ' + address)}"
+
+                        # Deduplication check
+                        is_duplicate = False
+                        if maps_url.strip() in exclude_urls_clean:
+                            is_duplicate = True
+                        if name.lower().strip() in exclude_names_clean:
+                            is_duplicate = True
+                        if website.strip() and website.strip() in exclude_urls_clean:
+                            is_duplicate = True
+
+                        if is_duplicate:
+                            continue
+
+                        # Clean PUA (Private Use Area) characters
+                        lead = {
+                            "name": "".join(c for c in name if not (0xe000 <= ord(c) <= 0xf8ff)).strip(),
+                            "category": "".join(c for c in category if not (0xe000 <= ord(c) <= 0xf8ff)).strip(),
+                            "address": "".join(c for c in address if not (0xe000 <= ord(c) <= 0xf8ff)).strip(),
+                            "phone": "".join(c for c in phone if not (0xe000 <= ord(c) <= 0xf8ff)).strip(),
+                            "rating": rating,
+                            "reviews": reviews,
+                            "website": website,
+                            "mapsUrl": maps_url
+                        }
+                        raw_leads.append(lead)
+                        if len(raw_leads) >= limit:
+                            break
+                    
+                    page += 1
+                else:
+                    print(f"[GoogleMapsAdapter] Serper Places API failed on page {page} with status {response.status_code}: {response.text}")
+                    break
+            except Exception as e:
+                print(f"[GoogleMapsAdapter] Exception querying Serper Places API on page {page}: {e}")
+                break
+
+        return raw_leads
+
+    def search_linkedin_fallback(self, company_name: str, location: str = None, api_key: str = None) -> str:
+        import urllib.parse
+        serper_key = api_key if (api_key and api_key.strip()) else os.getenv("SERPER_API_KEY") or ""
+        if not serper_key:
+            return None
+            
+        # Clean company name: split on common separators to extract the core brand name
+        brand_name = company_name
+        for separator in ["|", "-", "—", ":", "•"]:
+            if separator in brand_name:
+                brand_name = brand_name.split(separator)[0].strip()
+        brand_name = brand_name.strip()
+        
+        loc_str = f" {location.strip()}" if location and location.strip() else ""
+        query = f'site:linkedin.com/company "{brand_name}"{loc_str}'
+        
+        payload = {
+            "q": query,
+            "num": 3
+        }
+        
+        try:
+            response = requests.post(
+                "https://google.serper.dev/search",
+                headers={
+                    "X-API-KEY": serper_key,
+                    "Content-Type": "application/json"
+                },
+                json=payload,
+                timeout=10
+            )
+            if response.status_code == 200:
+                organic = response.json().get("organic", [])
+                for result in organic:
+                    link = result.get("link", "")
+                    if "linkedin.com/company/" in link:
+                        return link.split("?")[0].strip()
+        except Exception as e:
+            print(f"[GoogleMapsAdapter] LinkedIn search fallback exception: {e}")
+            
+        return None
 
     def scrape_playwright(self, business_type: str, location: str, max_results: int = 15, exclude_urls: set = None, exclude_names: set = None) -> list:
         import concurrent.futures

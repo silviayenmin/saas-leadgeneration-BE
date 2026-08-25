@@ -194,7 +194,7 @@ def determine_lead_platform(url: str) -> str:
         return "twitter"
     elif "reddit.com" in url_lower:
         return "reddit"
-    elif "google.com/maps" in url_lower or "places.googleapis.com" in url_lower:
+    elif "google.com/maps" in url_lower or "places.googleapis.com" in url_lower or "maps.google.com" in url_lower:
         return "google_maps"
     elif "weworkremotely.com" in url_lower:
         return "weworkremotely"
@@ -515,7 +515,7 @@ async def perform_search_background(task_id: str, payload: SearchRequest, user_i
             for q in intent_queries:
                 try:
                     if plat == "google_maps":
-                        places_key = user_cfg.get("placesApiKey") or settings.GOOGLE_PLACES_API_KEY
+                        places_key = user_cfg.get("serperApiKey") or user_cfg.get("placesApiKey") or settings.SERPER_API_KEY or settings.GOOGLE_PLACES_API_KEY
                         
                         # Extract exclusion sets to skip duplicate scraping
                         exclude_urls = set()
