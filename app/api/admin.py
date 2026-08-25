@@ -227,7 +227,7 @@ def get_system_stats(admin_user: dict = Depends(get_current_admin_user)):
         recent_subscriptions.append({
             "userId": u_id,
             "fullName": user_obj.get("fullName", "Unknown User"),
-            "email": user_obj.get("email", "unknown@mapflow.ai"),
+            "email": user_obj.get("email", "unknown@leadgen.ai"),
             "plan": s.get("plan", "FREE"),
             "creditLimit": s.get("creditLimit", 25),
             "updatedAt": s.get("updatedAt") or s.get("resetDate") or ""
@@ -427,7 +427,7 @@ def get_all_scans(admin_user: dict = Depends(get_current_admin_user)):
             
         scan_data = {
             **scan,
-            "userEmail": users_map.get(u_id, "unknown@mapflow.ai")
+            "userEmail": users_map.get(u_id, "unknown@leadgen.ai")
         }
         formatted_scans.append(scan_data)
 
@@ -775,5 +775,71 @@ def generate_user_password(
         "message": f"Successfully generated a new password for '{user.get('email')}'. The password has been emailed to the user.",
         "generatedPassword": generated_password
     }
+
+class AdminGlobalSettingsRequest(BaseModel):
+    active_provider: str
+    model: str
+    temperature: float
+    ollama_host: Optional[str] = None
+    groq_api_key: Optional[str] = None
+    google_places_api_key: Optional[str] = None
+
+@router.get("/settings")
+def get_global_settings(admin_user: dict = Depends(get_current_admin_user)):
+    coll = db_manager.get_collection("integrations")
+    if coll is not None:
+        cfg = coll.find_one({"userId": "global_admin_settings"}) or {}
+    else:
+        cfg = db_manager.json_db.find_one("integrations", {"userId": "global_admin_settings"}) or {}
+        
+    model_conf = cfg.get("modelConfig") or {}
+    active_provider = model_conf.get("active_provider", "groq")
+    providers = model_conf.get("providers") or {}
+    prov_conf = providers.get(active_provider) or {}
+    
+    return {
+        "success": True,
+        "data": {
+            "active_provider": active_provider,
+            "model": prov_conf.get("model") or "groq/compound-mini",
+            "temperature": prov_conf.get("temperature", 0.7),
+            "ollama_host": prov_conf.get("base_url") or "http://localhost:11434",
+            "groq_api_key": cfg.get("groqApiKey") or "",
+            "google_places_api_key": cfg.get("googlePlacesApiKey") or ""
+        }
+    }
+
+@router.post("/settings")
+def save_global_settings(req: AdminGlobalSettingsRequest, admin_user: dict = Depends(get_current_admin_user)):
+    coll = db_manager.get_collection("integrations")
+    
+    model_config = {
+        "active_provider": req.active_provider,
+        "providers": {
+            req.active_provider: {
+                "model": req.model,
+                "temperature": req.temperature,
+                "base_url": req.ollama_host or "http://localhost:11434"
+            }
+        }
+    }
+    
+    update_data = {
+        "modelConfig": model_config,
+        "groqApiKey": req.groq_api_key or "",
+        "googlePlacesApiKey": req.google_places_api_key or ""
+    }
+    
+    if coll is not None:
+        coll.update_one({"userId": "global_admin_settings"}, {"$set": update_data}, upsert=True)
+    else:
+        existing = db_manager.json_db.find_one("integrations", {"userId": "global_admin_settings"})
+        if existing:
+            db_manager.json_db.update_one("integrations", {"userId": "global_admin_settings"}, {"$set": update_data})
+        else:
+            update_data["userId"] = "global_admin_settings"
+            db_manager.json_db.insert_one("integrations", update_data)
+            
+    return {"success": True, "message": "Global configurations saved successfully."}
 
 

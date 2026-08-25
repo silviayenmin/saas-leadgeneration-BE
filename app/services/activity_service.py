@@ -71,16 +71,16 @@ class ActivityService:
             user = db_manager.json_db.find_one("users", {"id": user_id})
             
         user_name = "System"
-        user_email = "system@mapflow.ai"
+        user_email = "system@leadgen.ai"
         user_role = "user"
         
         if user:
             user_name = user.get("fullName") or user.get("name") or "User"
-            user_email = user.get("email") or "user@mapflow.ai"
+            user_email = user.get("email") or "user@leadgen.ai"
             user_role = user.get("role") or "user"
         elif user_id == "admin":
             user_name = "Super Admin"
-            user_email = "admin@mapflow.ai"
+            user_email = "admin@leadgen.ai"
             user_role = "admin"
             
         log_entry = {

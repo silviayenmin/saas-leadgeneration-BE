@@ -10,7 +10,7 @@ def main():
     db_manager.connect()
     try:
         # Mock admin_user dict parameter since it is Depends(get_current_admin_user)
-        stats_response = get_system_stats(admin_user={"email": "admin@mapflow.ai", "role": "admin"})
+        stats_response = get_system_stats(admin_user={"email": "admin@leadgen.ai", "role": "admin"})
         print("STATS RESPONSE JSON payload:")
         print(json.dumps(stats_response, indent=2))
     except Exception as e:

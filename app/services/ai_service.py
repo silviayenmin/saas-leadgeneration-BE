@@ -8,7 +8,7 @@ logger = logging.getLogger("mapflow_ai.ai_service")
 
 class GroqProvider:
     @staticmethod
-    async def generate(prompt: str, api_key: str, model: str = "llama-3.3-70b-versatile", temperature: float = 0.7) -> str:
+    async def generate(prompt: str, api_key: str, model: str = "groq/compound-mini", temperature: float = 0.7) -> str:
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -17,7 +17,7 @@ class GroqProvider:
         payload = {
             "model": model,
             "messages": [
-                {"role": "system", "content": "You are MapFlow AI, an expert B2B lead generation & sales pitch assistant."},
+                {"role": "system", "content": "You are LeadGen AI, an expert B2B lead generation & sales pitch assistant."},
                 {"role": "user", "content": prompt}
             ],
             "temperature": temperature
@@ -120,7 +120,7 @@ Guidelines:
         effective_key = api_key or settings.GROQ_API_KEY
         try:
             if provider == "groq" and effective_key:
-                effective_model = model or "llama-3.3-70b-versatile"
+                effective_model = model or "groq/compound-mini"
                 return await GroqProvider.generate(prompt, effective_key, model=effective_model, temperature=temperature)
             else:
                 effective_model = model or "llama3.1:8b"
@@ -128,4 +128,4 @@ Guidelines:
                 return await OllamaProvider.generate(prompt, base_url=effective_url, model=effective_model, temperature=temperature)
         except Exception as e:
             logger.warning(f"AI pitch generation failed ({e}). Returning template pitch.")
-            return f"Hi {business_data.get('name')} Team,\n\nI noticed {business_data.get('name')} has an impressive {business_data.get('rating')}-star rating on Google Maps!\n\nWe specialize in {pitch_type} for top-tier local service providers. Would you be open to a 5-minute chat this week on how we can double your online leads?\n\nBest regards,\nMapFlow AI Team"
+            return f"Hi {business_data.get('name')} Team,\n\nI noticed {business_data.get('name')} has an impressive {business_data.get('rating')}-star rating on Google Maps!\n\nWe specialize in {pitch_type} for top-tier local service providers. Would you be open to a 5-minute chat this week on how we can double your online leads?\n\nBest regards,\nLeadGen AI Team"

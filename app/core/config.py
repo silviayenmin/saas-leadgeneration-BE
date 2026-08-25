@@ -2,7 +2,7 @@ import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "MapFlow AI API"
+    PROJECT_NAME: str = "LeadGen AI API"
     VERSION: str = "1.0.0"
     API_PREFIX: str = "/api"
     

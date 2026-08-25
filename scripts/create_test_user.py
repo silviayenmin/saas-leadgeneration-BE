@@ -11,7 +11,7 @@ from app.core.security import get_password_hash
 def main():
     db_manager.connect()
 
-    email = "admin@mapflow.ai"
+    email = "admin@leadgen.ai"
     password = "admin123"
 
     # Query if exists
