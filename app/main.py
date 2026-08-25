@@ -101,14 +101,14 @@ app.add_middleware(ActivityLoggingMiddleware)
 
 @app.on_event("startup")
 async def startup_event():
-    logger.info("Initializing MapFlow AI Backend Services...")
+    logger.info("Initializing LeadGen AI Backend Services...")
     db_manager.connect()
 
 @app.get("/")
 async def root():
     return {
         "success": True,
-        "product": "MapFlow AI",
+        "product": "LeadGen AI",
         "version": settings.VERSION,
         "db_mode": "JSON_FALLBACK" if db_manager.use_json_fallback else "MONGODB"
     }

@@ -1407,9 +1407,13 @@ Subject: [Subject Line]
         # Load user's LLM configuration from integrations
         coll_int = db_manager.get_collection("integrations")
         if coll_int is not None:
-            cfg = coll_int.find_one({"userId": user_id}) or {}
+            cfg = coll_int.find_one({"userId": "global_admin_settings"}) or {}
+            if not cfg.get("modelConfig"):
+                cfg = coll_int.find_one({"userId": user_id}) or {}
         else:
-            cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
+            cfg = db_manager.json_db.find_one("integrations", {"userId": "global_admin_settings"}) or {}
+            if not cfg.get("modelConfig"):
+                cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
             
         model_conf = cfg.get("modelConfig") or {}
         active_provider = model_conf.get("active_provider", "groq")
@@ -1424,7 +1428,7 @@ Subject: [Subject Line]
         pitch_content = ""
         
         if active_provider == "groq":
-            api_key = settings.GROQ_API_KEY
+            api_key = cfg.get("groqApiKey") or settings.GROQ_API_KEY
             if not api_model:
                 api_model = "groq/compound-mini"
                 
@@ -2108,7 +2112,7 @@ async def get_user_profile_endpoint(user_id: str = Depends(get_current_user_id))
     return {
         "status": "success",
         "profile": {
-            "email": user.get("email") or "user@mapflow-ai.com",
+            "email": user.get("email") or "user@leadgen-ai.com",
             "displayName": user.get("fullName") or (user.get("email") or "user").split("@")[0].capitalize(),
             "businessName": user.get("companyName") or "My Business",
             "agencyInfo": user.get("bio") or "premier design & development services",
@@ -2488,15 +2492,19 @@ async def sync_replies_endpoint(user_id: str = Depends(get_current_user_id)):
 async def get_model_config_endpoint(user_id: str = Depends(get_current_user_id)):
     coll = db_manager.get_collection("integrations")
     if coll is not None:
-        cfg = coll.find_one({"userId": user_id}) or {}
+        cfg = coll.find_one({"userId": "global_admin_settings"}) or {}
+        if not cfg.get("modelConfig"):
+            cfg = coll.find_one({"userId": user_id}) or {}
     else:
-        cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
+        cfg = db_manager.json_db.find_one("integrations", {"userId": "global_admin_settings"}) or {}
+        if not cfg.get("modelConfig"):
+            cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
         
     default_config = {
         "active_provider": "groq",
         "providers": {
             "groq": {
-                "model": "llama-3.3-70b-versatile",
+                "model": "groq/compound-mini",
                 "temperature": 0.7
             }
         }
@@ -2527,9 +2535,13 @@ async def update_model_config_endpoint(payload: ModelConfigPayload, user_id: str
 async def get_places_endpoint(user_id: str = Depends(get_current_user_id)):
     coll = db_manager.get_collection("integrations")
     if coll is not None:
-        cfg = coll.find_one({"userId": user_id}) or {}
+        cfg = coll.find_one({"userId": "global_admin_settings"}) or {}
+        if not cfg.get("googlePlacesApiKey"):
+            cfg = coll.find_one({"userId": user_id}) or {}
     else:
-        cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
+        cfg = db_manager.json_db.find_one("integrations", {"userId": "global_admin_settings"}) or {}
+        if not cfg.get("googlePlacesApiKey"):
+            cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
         
     api_key = cfg.get("googlePlacesApiKey") or ""
     masked_key = ""
@@ -2572,9 +2584,13 @@ async def save_places_endpoint(payload: PlacesConfigPayload, user_id: str = Depe
 async def get_twitter_endpoint(user_id: str = Depends(get_current_user_id)):
     coll = db_manager.get_collection("integrations")
     if coll is not None:
-        cfg = coll.find_one({"userId": user_id}) or {}
+        cfg = coll.find_one({"userId": "global_admin_settings"}) or {}
+        if not cfg.get("twitterApiKey"):
+            cfg = coll.find_one({"userId": user_id}) or {}
     else:
-        cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
+        cfg = db_manager.json_db.find_one("integrations", {"userId": "global_admin_settings"}) or {}
+        if not cfg.get("twitterApiKey"):
+            cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
         
     api_key = cfg.get("twitterApiKey") or ""
     masked_key = ""
@@ -2661,7 +2677,7 @@ async def get_google_sheets_config_endpoint(user_id: str = Depends(get_current_u
                 creds_data = json.load(f)
                 client_email = creds_data.get("client_email")
         except Exception:
-            client_email = "google-sheets-sync@mapflow-ai.iam.gserviceaccount.com"
+            client_email = "google-sheets-sync@leadgen-ai.iam.gserviceaccount.com"
     
     return {
         "status": "success",

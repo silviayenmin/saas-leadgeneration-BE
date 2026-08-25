@@ -43,9 +43,13 @@ async def generate_pitch_ai(req: ColdPitchRequest, provider: str = "groq", user_
     # Load integrations model configuration
     coll_int = db_manager.get_collection("integrations")
     if coll_int is not None:
-        cfg = coll_int.find_one({"userId": user_id}) or {}
+        cfg = coll_int.find_one({"userId": "global_admin_settings"}) or {}
+        if not cfg.get("modelConfig"):
+            cfg = coll_int.find_one({"userId": user_id}) or {}
     else:
-        cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
+        cfg = db_manager.json_db.find_one("integrations", {"userId": "global_admin_settings"}) or {}
+        if not cfg.get("modelConfig"):
+            cfg = db_manager.json_db.find_one("integrations", {"userId": user_id}) or {}
 
     model_conf = cfg.get("modelConfig") or {}
     active_provider = model_conf.get("active_provider", "groq")
@@ -56,6 +60,7 @@ async def generate_pitch_ai(req: ColdPitchRequest, provider: str = "groq", user_
     api_model = prov_conf.get("model")
     api_temp = prov_conf.get("temperature", 0.7)
     api_url = prov_conf.get("base_url")
+    api_key = cfg.get("groqApiKey")
 
     coll_b = db_manager.get_collection("businesses")
     if coll_b is not None:
@@ -72,7 +77,8 @@ async def generate_pitch_ai(req: ColdPitchRequest, provider: str = "groq", user_
         provider=active_provider,
         model=api_model,
         temperature=api_temp,
-        base_url=api_url
+        base_url=api_url,
+        api_key=api_key
     )
 
     return {

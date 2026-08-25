@@ -17,9 +17,9 @@ def main():
         # Staggered dates for prominent test accounts to look extremely realistic
         custom_dates = {
             "silvia.yenmin@gmail.com": datetime.datetime(2026, 8, 20, 8, 30, 0),    # ~7 hours ago
-            "test@mapflow.ai": datetime.datetime(2026, 8, 20, 11, 15, 0),           # ~5 hours ago
+            "test@leadgen.ai": datetime.datetime(2026, 8, 20, 11, 15, 0),           # ~5 hours ago
             "infantaa014@gmail.com": datetime.datetime(2026, 8, 20, 13, 45, 0),     # ~2 hours ago
-            "admin@mapflow.ai": datetime.datetime(2026, 8, 18, 9, 20, 0),           # 2 days ago
+            "admin@leadgen.ai": datetime.datetime(2026, 8, 18, 9, 20, 0),           # 2 days ago
             "john@example.com": datetime.datetime(2026, 8, 17, 14, 10, 0)           # 3 days ago
         }
         

@@ -23,8 +23,8 @@ class EmailService:
 
         try:
             msg = MIMEMultipart("alternative")
-            msg["Subject"] = f"MapFlow AI — {otp_code} is your Email Verification Code"
-            msg["From"] = f"MapFlow AI <{smtp_user}>"
+            msg["Subject"] = f"LeadGen AI — {otp_code} is your Email Verification Code"
+            msg["From"] = f"LeadGen AI <{smtp_user}>"
             msg["To"] = to_email
 
             html_content = f"""
@@ -40,12 +40,12 @@ class EmailService:
             </head>
             <body>
               <div class="card">
-                <h2 style="color: #0EA5A4;">MAPFLOW AI</h2>
+                <h2 style="color: #0EA5A4;">LEADGEN AI</h2>
                 <h3 style="color: #F8FAFC;">Verify Your Email Address</h3>
-                <p style="color: #94A3B8;">Thank you for registering with MapFlow AI. Please use the verification code below to complete your setup:</p>
+                <p style="color: #94A3B8;">Thank you for registering with LeadGen AI. Please use the verification code below to complete your setup:</p>
                 <div class="code">{otp_code}</div>
                 <p style="color: #94A3B8; font-size: 13px;">This code is valid for 10 minutes. If you did not request this code, please ignore this email.</p>
-                <div class="footer">© 2026 MapFlow AI. All rights reserved.</div>
+                <div class="footer">© 2026 LeadGen AI. All rights reserved.</div>
               </div>
             </body>
             </html>
@@ -89,8 +89,8 @@ class EmailService:
 
         try:
             msg = MIMEMultipart("alternative")
-            msg["Subject"] = f"MapFlow AI — {reset_code} is your Password Reset Code"
-            msg["From"] = f"MapFlow AI <{smtp_user}>"
+            msg["Subject"] = f"LeadGen AI — {reset_code} is your Password Reset Code"
+            msg["From"] = f"LeadGen AI <{smtp_user}>"
             msg["To"] = to_email
 
             html_content = f"""
@@ -106,12 +106,12 @@ class EmailService:
             </head>
             <body>
               <div class="card">
-                <h2 style="color: #0EA5A4;">MAPFLOW AI</h2>
+                <h2 style="color: #0EA5A4;">LEADGEN AI</h2>
                 <h3 style="color: #F8FAFC;">Reset Your Password</h3>
                 <p style="color: #94A3B8;">We received a request to reset your password. Use the verification code below to set a new password:</p>
                 <div class="code">{reset_code}</div>
                 <p style="color: #94A3B8; font-size: 13px;">This code is valid for 10 minutes. If you did not request a password reset, please ignore this email.</p>
-                <div class="footer">© 2026 MapFlow AI. All rights reserved.</div>
+                <div class="footer">© 2026 LeadGen AI. All rights reserved.</div>
               </div>
             </body>
             </html>
@@ -154,8 +154,8 @@ class EmailService:
 
         try:
             msg = MIMEMultipart("alternative")
-            msg["Subject"] = "MapFlow AI — Your Admin Account Has Been Created"
-            msg["From"] = f"MapFlow AI <{smtp_user}>"
+            msg["Subject"] = "LeadGen AI — Your Admin Account Has Been Created"
+            msg["From"] = f"LeadGen AI <{smtp_user}>"
             msg["To"] = to_email
 
             html_content = f"""
@@ -171,9 +171,9 @@ class EmailService:
             </head>
             <body>
               <div class="card">
-                <h2 style="color: #0EA5A4; text-align: center; margin-bottom: 24px;">MAPFLOW AI</h2>
+                <h2 style="color: #0EA5A4; text-align: center; margin-bottom: 24px;">LEADGEN AI</h2>
                 <h3 style="color: #F8FAFC;">Welcome to the Team, {name}!</h3>
-                <p style="color: #94A3B8;">An administrative account has been created for you on the MapFlow AI Admin Console.</p>
+                <p style="color: #94A3B8;">An administrative account has been created for you on the LeadGen AI Admin Console.</p>
                 <p style="color: #94A3B8;">Below are your temporary credentials. Please log in and change your password immediately.</p>
                 
                 <div class="credentials">
@@ -182,7 +182,7 @@ class EmailService:
                   <strong>Temporary Password:</strong> {password}
                 </div>
                 
-                <div class="footer">© 2026 MapFlow AI. All rights reserved.</div>
+                <div class="footer">© 2026 LeadGen AI. All rights reserved.</div>
               </div>
             </body>
             </html>
@@ -225,8 +225,8 @@ class EmailService:
 
         try:
             msg = MIMEMultipart("alternative")
-            msg["Subject"] = "MapFlow AI — Your Account Password Has Been Updated"
-            msg["From"] = f"MapFlow AI <{smtp_user}>"
+            msg["Subject"] = "LeadGen AI — Your Account Password Has Been Updated"
+            msg["From"] = f"LeadGen AI <{smtp_user}>"
             msg["To"] = to_email
 
             html_content = f"""
@@ -242,7 +242,7 @@ class EmailService:
             </head>
             <body>
               <div class="card">
-                <h2 style="color: #0EA5A4; text-align: center; margin-bottom: 24px;">MAPFLOW AI</h2>
+                <h2 style="color: #0EA5A4; text-align: center; margin-bottom: 24px;">LEADGEN AI</h2>
                 <h3 style="color: #F8FAFC;">Hello, {name}!</h3>
                 <p style="color: #94A3B8;">An administrator has reset your password. Below is your newly generated temporary password. Please log in and change it in your Profile Settings.</p>
                 
@@ -251,7 +251,7 @@ class EmailService:
                   <strong>New Generated Password:</strong> {password}
                 </div>
                 
-                <div class="footer">© 2026 MapFlow AI. All rights reserved.</div>
+                <div class="footer">© 2026 LeadGen AI. All rights reserved.</div>
               </div>
             </body>
             </html>

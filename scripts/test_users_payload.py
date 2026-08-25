@@ -9,7 +9,7 @@ from app.api.admin import get_users_list
 def main():
     db_manager.connect()
     try:
-        users_response = get_users_list(admin_user={"email": "admin@mapflow.ai", "role": "admin"})
+        users_response = get_users_list(admin_user={"email": "admin@leadgen.ai", "role": "admin"})
         print("USERS RESPONSE:")
         print(json.dumps(users_response, indent=2))
     except Exception as e:
