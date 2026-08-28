@@ -678,9 +678,38 @@ async def perform_search_background(task_id: str, payload: SearchRequest, user_i
                             email_matches = re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}", f"{title} {snippet}")
                             if email_matches:
                                 c_info = email_matches[0]
-                        lead["contactInfo"] = c_info
-                        lead["contactSource"] = "google_maps_crawl" if c_info else "none"
-                        lead["contactConfidence"] = "high" if c_info else "none"
+                        
+                        # Fallback to B2B Enrichment if still no email found
+                        if not c_info:
+                            company_name_val = lead.get("companyName")
+                            author_name_val = lead.get("authorName") or "Business Owner"
+                            if company_name_val and company_name_val != "Unknown Business":
+                                try:
+                                    enrich_mgr = ContactEnrichmentManager()
+                                    enrich_res = enrich_mgr.enrich(author_name_val, company_name_val)
+                                    if enrich_res and enrich_res.get("email"):
+                                        c_info = enrich_res["email"]
+                                        lead["contactSource"] = enrich_res.get("contactSource", "b2b_enrichment")
+                                        lead["contactConfidence"] = enrich_res.get("contactConfidence", "medium")
+                                        
+                                        # Also extract key contacts if available from enrichment
+                                        if enrich_res.get("keyContacts"):
+                                            lead["keyContacts"] = enrich_res["keyContacts"]
+                                            if enrich_res.get("contactSource"):
+                                                lead["keyContactsSource"] = enrich_res["contactSource"]
+                                except Exception as enrich_err:
+                                    print(f"Error enriching google_maps lead {company_name_val}: {enrich_err}")
+                                    
+                        if c_info:
+                            lead["contactInfo"] = c_info
+                            if "contactSource" not in lead:
+                                lead["contactSource"] = "google_maps_crawl"
+                            if "contactConfidence" not in lead:
+                                lead["contactConfidence"] = "high"
+                        else:
+                            lead["contactInfo"] = None
+                            lead["contactSource"] = "none"
+                            lead["contactConfidence"] = "none"
                     else:
                         lead["contactInfo"] = None
                         lead["contactSource"] = "none"
@@ -1093,7 +1122,7 @@ async def enrich_lead_contact_endpoint(payload: EnrichContactRequest, user_id: s
 
     # Run modular enrichment manager
     enrich_mgr = ContactEnrichmentManager()
-    enrichment_info = enrich_mgr.enrich(target_author, company)
+    enrichment_info = enrich_mgr.enrich(target_author, company, website=lead.get("website"))
     
     c_info = enrichment_info.get("email")
     if c_info == "hello@company.com" or is_empty_value(c_info):

@@ -77,11 +77,11 @@ def get_chat_completion(messages, response_format=None, temperature=0.1) -> str:
 
 
 class BaseEnricher:
-    def enrich(self, author_name: str, company_name: str) -> dict:
+    def enrich(self, author_name: str, company_name: str, website: str = None, **kwargs) -> dict:
         raise NotImplementedError
 
 class HunterEnricher(BaseEnricher):
-    def enrich(self, author_name: str, company_name: str) -> dict:
+    def enrich(self, author_name: str, company_name: str, website: str = None, **kwargs) -> dict:
         api_key = settings.HUNTER_API_KEY
         if not api_key:
             return {}
@@ -89,7 +89,15 @@ class HunterEnricher(BaseEnricher):
             parts = author_name.strip().split()
             first = parts[0] if parts else ""
             last = parts[1] if len(parts) > 1 else ""
-            domain = company_name.lower().split()[0].replace(",","").replace(".","") + ".com"
+            
+            if website and website.strip():
+                from urllib.parse import urlparse
+                parsed = urlparse(website)
+                domain = parsed.netloc.lower()
+                if domain.startswith("www."):
+                    domain = domain[4:]
+            else:
+                domain = company_name.lower().split()[0].replace(",","").replace(".","") + ".com"
 
             resp = requests.get(
                 "https://api.hunter.io/v2/email-finder",
@@ -130,7 +138,7 @@ def format_money(val) -> str:
         return str(val)
 
 class ApolloEnricher(BaseEnricher):
-    def enrich(self, author_name: str, company_name: str) -> dict:
+    def enrich(self, author_name: str, company_name: str, website: str = None, **kwargs) -> dict:
         api_key = settings.APOLLO_API_KEY
         if not api_key:
             return {}
@@ -159,7 +167,15 @@ class ApolloEnricher(BaseEnricher):
                     "per_page": 50
                 }
 
-            if company_name and not is_empty_value(company_name) and company_name.lower() not in ["not specified", "unknown", "none"]:
+            if website and website.strip():
+                from urllib.parse import urlparse
+                parsed = urlparse(website)
+                domain = parsed.netloc.lower()
+                if domain.startswith("www."):
+                    domain = domain[4:]
+                if domain:
+                    json_payload["q_organization_domains"] = domain
+            elif company_name and not is_empty_value(company_name) and company_name.lower() not in ["not specified", "unknown", "none"]:
                 json_payload["q_organization_name"] = company_name
 
             resp = requests.post(
@@ -222,13 +238,19 @@ class ApolloEnricher(BaseEnricher):
         return {}
 
 class ProspeoEnricher(BaseEnricher):
-    def enrich(self, author_name: str, company_name: str) -> dict:
+    def enrich(self, author_name: str, company_name: str, website: str = None, **kwargs) -> dict:
         api_key = settings.PROSPEO_API_KEY
         if not api_key:
             return {}
         try:
             domain = ""
-            if company_name and not is_empty_value(company_name) and company_name.lower() not in ["not specified", "unknown", "none"]:
+            if website and website.strip():
+                from urllib.parse import urlparse
+                parsed = urlparse(website)
+                domain = parsed.netloc.lower()
+                if domain.startswith("www."):
+                    domain = domain[4:]
+            elif company_name and not is_empty_value(company_name) and company_name.lower() not in ["not specified", "unknown", "none"]:
                 domain = company_name.lower().split()[0].replace(",","").replace(".","").replace("&","") + ".com"
                 
             resp = requests.post(
@@ -343,7 +365,7 @@ def find_linkedin_profile(name: str, company: str, company_linkedin: str = None)
 
 
 class SerperEnricher(BaseEnricher):
-    def enrich(self, author_name: str, company_name: str, company_linkedin: str = None) -> dict:
+    def enrich(self, author_name: str, company_name: str, company_linkedin: str = None, website: str = None, **kwargs) -> dict:
         api_key = settings.SERPER_API_KEY
         if not api_key:
             return {}
@@ -479,7 +501,7 @@ class ContactEnrichmentManager:
     def __init__(self, provider: str = "fallback_chain"):
         self.provider = provider.lower().strip()
 
-    def enrich(self, author_name: str, company_name: str) -> dict:
+    def enrich(self, author_name: str, company_name: str, website: str = None) -> dict:
         # Clean company name to remove trailing keywords, cities, separators, and corporate suffixes
         cleaned_company = ""
         if company_name and not is_empty_value(company_name) and company_name.lower().strip() not in ["not specified", "unknown", "none"]:
@@ -509,7 +531,7 @@ class ContactEnrichmentManager:
         # New: fallback chain tries Apollo → Hunter → Prospeo → Serper Search fallback
         if self.provider == "fallback_chain":
             for EnricherClass in [ApolloEnricher, HunterEnricher, ProspeoEnricher, SerperEnricher]:
-                result = EnricherClass().enrich(author_name, cleaned_company)
+                result = EnricherClass().enrich(author_name, cleaned_company, website=website)
                 if result and (result.get("email") or result.get("keyContacts")):
                     return result
             # No guessing fallback, return empty values
@@ -521,13 +543,13 @@ class ContactEnrichmentManager:
 
         # Keep existing single-provider logic below unchanged
         elif self.provider == "hunter":
-            res = HunterEnricher().enrich(author_name, cleaned_company)
+            res = HunterEnricher().enrich(author_name, cleaned_company, website=website)
             if res: return res
         elif self.provider == "prospeo":
-            res = ProspeoEnricher().enrich(author_name, cleaned_company)
+            res = ProspeoEnricher().enrich(author_name, cleaned_company, website=website)
             if res: return res
         elif self.provider == "apollo":
-            res = ApolloEnricher().enrich(author_name, cleaned_company)
+            res = ApolloEnricher().enrich(author_name, cleaned_company, website=website)
             if res: return res
 
         return {
