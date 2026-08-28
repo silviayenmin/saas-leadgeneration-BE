@@ -17,6 +17,57 @@ import random
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 
+def format_international_phone(phone: str, address: str = "", location: str = "") -> str:
+    if not phone or not phone.strip():
+        return ""
+    
+    phone_clean = phone.strip()
+    if phone_clean.startswith("+"):
+        return phone_clean
+        
+    digits_only = "".join(c for c in phone_clean if c.isdigit())
+    
+    country_codes = {
+        "singapore": "+65",
+        "india": "+91",
+        "united states": "+1",
+        "usa": "+1",
+        "united kingdom": "+44",
+        "uk": "+44",
+        "australia": "+61",
+        "canada": "+1",
+        "malaysia": "+60",
+        "indonesia": "+62",
+        "thailand": "+66",
+        "vietnam": "+84",
+        "philippines": "+63",
+        "new zealand": "+64",
+        "germany": "+49",
+        "france": "+33",
+        "united arab emirates": "+971",
+        "uae": "+971"
+    }
+    
+    loc_lower = location.lower() if location else ""
+    addr_lower = address.lower() if address else ""
+    
+    prefix = ""
+    for name, code in country_codes.items():
+        if (loc_lower and name in loc_lower) or (addr_lower and name in addr_lower):
+            prefix = code
+            break
+            
+    if not prefix and len(digits_only) == 8 and digits_only[0] in ["6", "8", "9"]:
+        prefix = "+65"
+        
+    if prefix:
+        code_digits = prefix.replace("+", "")
+        if digits_only.startswith(code_digits) and len(digits_only) > len(code_digits) + 4:
+            return f"+{phone_clean}"
+        return f"{prefix} {phone_clean}"
+        
+    return phone_clean
+
 class GoogleMapsAdapter:
     def __init__(self):
         self.platform_name = "google_maps"
@@ -40,10 +91,51 @@ class GoogleMapsAdapter:
             summary = None
             web_contacts = []
             founded_year = None
-            if lead.get("website"):
-                print(f"[GoogleMapsAdapter] Crawling website for business '{lead.get('name')}': {lead.get('website')}")
+            
+            website = lead.get("website")
+            
+            # Check if website is missing, or is a social media profile, directory, or booking link
+            is_invalid_website = False
+            if website and website.strip():
+                from urllib.parse import urlparse
+                parsed = urlparse(website.strip())
+                domain = parsed.netloc.lower()
+                
+                # If the website URL returned by Google Maps is a LinkedIn profile, save it to the linkedin field!
+                if "linkedin.com" in domain:
+                    linkedin = website.strip()
+                    
+                exclusions = [
+                    "facebook.com", "linkedin.com", "instagram.com", "twitter.com", "x.com",
+                    "youtube.com", "wikipedia.org", "yelp.com", "tripadvisor.com",
+                    "google.com", "maps.google.com", "pinterest.com", "glassdoor.com",
+                    "indeed.com", "crunchbase.com", "sg.linkedin.com", "jobstreet.com",
+                    "mapquest.com", "yellowpages.com", "waze.com", "zoominfo.com",
+                    "dnb.com", "sgpbusiness.com", "clutch.co", "sortlist.com", "sortlist.co",
+                    "digitalagencynetwork.com", "agencyspotter.com", "themanifest.com",
+                    "g2.com", "capterra.com", "trustpilot.com", "foursquare.com",
+                    "calendly.com", "hubspot.com", "linktr.ee", "companiesg.com",
+                    "sgpcompany.com", "sgcompany.org"
+                ]
+                if any(ex in domain for ex in exclusions):
+                    is_invalid_website = True
+            
+            if not website or not website.strip() or is_invalid_website:
+                orig_web = website
+                print(f"[GoogleMapsAdapter] Website missing or invalid ('{orig_web}') for '{lead.get('name')}'. Querying Serper fallback...")
                 try:
-                    crawl_res = self.crawl_business_website_optimized(lead["website"], lead["name"])
+                    fallback_website = self.search_website_fallback(lead.get("name"), location, api_key=api_key)
+                    if fallback_website:
+                        website = fallback_website
+                        lead["website"] = website
+                        print(f"      -> Found website via Serper search fallback: {website}")
+                except Exception as fb_err:
+                    print(f"[GoogleMapsAdapter] Website search fallback error: {fb_err}")
+            
+            if website:
+                print(f"[GoogleMapsAdapter] Crawling website for business '{lead.get('name')}': {website}")
+                try:
+                    crawl_res = self.crawl_business_website_optimized(website, lead["name"])
                     emails = crawl_res["emails"]
                     linkedin = crawl_res["socials"]["linkedin"]
                     owner_name = crawl_res["owner_name"]
@@ -102,6 +194,66 @@ class GoogleMapsAdapter:
             results.append(result)
             
         return results
+
+    def search_website_fallback(self, company_name: str, location: str = None, api_key: str = None) -> str:
+        import urllib.parse
+        from urllib.parse import urlparse
+        serper_key = api_key if (api_key and api_key.strip()) else os.getenv("SERPER_API_KEY") or ""
+        if not serper_key:
+            return None
+            
+        # Clean company name: split on common separators to extract the core brand name
+        brand_name = company_name
+        for separator in ["|", "-", "—", "–", ":", "•", "·"]:
+            if separator in brand_name:
+                brand_name = brand_name.split(separator)[0].strip()
+        brand_name = brand_name.strip()
+        
+        loc_str = f" {location.strip()}" if location and location.strip() else ""
+        query = f'{brand_name}{loc_str}'
+        
+        payload = {
+            "q": query,
+            "num": 5
+        }
+        
+        try:
+            response = requests.post(
+                "https://google.serper.dev/search",
+                headers={
+                    "X-API-KEY": serper_key,
+                    "Content-Type": "application/json"
+                },
+                json=payload,
+                timeout=10
+            )
+            if response.status_code == 200:
+                organic = response.json().get("organic", [])
+                for result in organic:
+                    link = result.get("link", "")
+                    if not link:
+                        continue
+                    parsed = urlparse(link)
+                    domain = parsed.netloc.lower()
+                    
+                    exclusions = [
+                        "facebook.com", "linkedin.com", "instagram.com", "twitter.com", "x.com",
+                        "youtube.com", "wikipedia.org", "yelp.com", "tripadvisor.com",
+                        "google.com", "maps.google.com", "pinterest.com", "glassdoor.com",
+                        "indeed.com", "crunchbase.com", "sg.linkedin.com", "jobstreet.com",
+                        "mapquest.com", "yellowpages.com", "waze.com", "zoominfo.com",
+                        "dnb.com", "sgpbusiness.com", "clutch.co", "sortlist.com", "sortlist.co",
+                        "digitalagencynetwork.com", "agencyspotter.com", "themanifest.com",
+                        "g2.com", "capterra.com", "trustpilot.com", "foursquare.com",
+                        "calendly.com", "hubspot.com", "linktr.ee", "companiesg.com",
+                        "sgpcompany.com", "sgcompany.org"
+                    ]
+                    if not any(ex in domain for ex in exclusions):
+                        return link
+        except Exception as e:
+            print(f"[GoogleMapsAdapter] Website search fallback exception: {e}")
+            
+        return None
 
     def crawl_business_website_optimized(self, url: str, company_name: str) -> dict:
         """
@@ -236,8 +388,9 @@ class GoogleMapsAdapter:
 
         raw_leads = []
         page = 1
-        max_pages = 5  # Fetch up to 50 results across 5 pages if duplicates are skipped
-        
+        # max_pages = 5  # Fetch up to 50 results across 5 pages if duplicates are skipped
+        max_pages = max(10, (limit // 10) + 5) # dynamic-ah limit logic dynamic calculation use pannalam:
+
         while len(raw_leads) < limit and page <= max_pages:
             payload = {
                 "q": query,
@@ -304,7 +457,7 @@ class GoogleMapsAdapter:
                             "name": "".join(c for c in name if not (0xe000 <= ord(c) <= 0xf8ff)).strip(),
                             "category": "".join(c for c in category if not (0xe000 <= ord(c) <= 0xf8ff)).strip(),
                             "address": "".join(c for c in address if not (0xe000 <= ord(c) <= 0xf8ff)).strip(),
-                            "phone": "".join(c for c in phone if not (0xe000 <= ord(c) <= 0xf8ff)).strip(),
+                            "phone": format_international_phone("".join(c for c in phone if not (0xe000 <= ord(c) <= 0xf8ff)).strip(), address=address, location=location),
                             "rating": rating,
                             "reviews": reviews,
                             "website": website,
@@ -332,13 +485,13 @@ class GoogleMapsAdapter:
             
         # Clean company name: split on common separators to extract the core brand name
         brand_name = company_name
-        for separator in ["|", "-", "—", ":", "•"]:
+        for separator in ["|", "-", "—", "–", ":", "•", "·"]:
             if separator in brand_name:
                 brand_name = brand_name.split(separator)[0].strip()
         brand_name = brand_name.strip()
         
         loc_str = f" {location.strip()}" if location and location.strip() else ""
-        query = f'site:linkedin.com/company "{brand_name}"{loc_str}'
+        query = f'site:linkedin.com/company {brand_name}{loc_str}'
         
         payload = {
             "q": query,
@@ -709,7 +862,7 @@ class GoogleMapsAdapter:
                                         if detailed_data.get("website"):
                                             lead["website"] = detailed_data["website"]
                                         if detailed_data.get("phone"):
-                                            lead["phone"] = detailed_data["phone"]
+                                            lead["phone"] = format_international_phone(detailed_data["phone"], address=lead.get("address"), location=location)
                                         if detailed_data.get("address"):
                                             lead["address"] = detailed_data["address"]
                                         if detailed_data.get("category"):
@@ -731,6 +884,7 @@ class GoogleMapsAdapter:
                                 cleaned_lead[key] = val_clean.strip()
                             else:
                                 cleaned_lead[key] = ""
+                        cleaned_lead["phone"] = format_international_phone(cleaned_lead["phone"], address=cleaned_lead["address"], location=location)
                         cleaned_leads.append(cleaned_lead)
                         phone_lbl = cleaned_lead["phone"] or "no phone"
                         safe_name = cleaned_lead["name"].encode('ascii', errors='ignore').decode('ascii')
